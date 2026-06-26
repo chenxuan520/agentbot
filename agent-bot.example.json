@@ -1,0 +1,31 @@
+{
+  "runtime": {
+    "defaultProvider": "feishu",
+    "defaultBackend": "opencode",
+    "schedulerIntervalSeconds": 1,
+    "schedulerBatchLimit": 50
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080
+  },
+  "web": {
+    "baseURL": "https://agent-bot.example.com"
+  },
+  "auth": {
+    "projectToken": "CHANGE_ME_PROJECT_TOKEN",
+    "secret": "CHANGE_ME_SESSION_SECRET"
+  },
+  "providers": {
+    "feishu": {
+      "appID": "cli_xxx",
+      "appSecret": "CHANGE_ME_FEISHU_APP_SECRET",
+      "ackEmoji": "OnIt"
+    }
+  },
+  "backends": {
+    "opencode": {
+      "baseURL": "http://localhost:4096"
+    }
+  }
+}

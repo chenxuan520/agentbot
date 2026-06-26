@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "template": "default",
+  "agent": {
+    "backend": "opencode",
+    "agentsMode": "template"
+  },
+  "settings": {
+    "replyMode": "direct",
+    "historyTTLHours": 24,
+    "acceptGroupHumanMessagesWithoutMention": false,
+    "acceptOtherBotMessages": false,
+    "acceptInteractiveCardMessages": false
+  },
+  "mounts": {
+    "skillIds": [
+      "cron",
+      "refuse",
+      "session-settings"
+    ],
+    "subagentIds": [],
+    "repoIds": []
+  }
+}

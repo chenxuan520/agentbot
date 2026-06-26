@@ -1,0 +1,21 @@
+specs
+# data/ is all runtime/generated state: chats & session workspaces, scheduler,
+# backups, sqlite, run pid/logs, and any mounted/cloned repos. Never commit it;
+# keep only the .gitkeep placeholder so the dir survives. Use data/* (not data/)
+# so the negation below can re-include .gitkeep.
+data/*
+!data/.gitkeep
+# shared git repos registered under agents/repos (real clones or symlinks into a
+# source tree) — same idea, never commit the repo pile.
+agents/repos/
+.opencode
+agent-bot.json
+__pycache__/
+nohup.out
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+/a.txt
+.gdpa
+*.out
+/agent-bot
