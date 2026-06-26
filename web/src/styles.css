@@ -811,10 +811,48 @@ p {
   min-height: 640px;
 }
 
+.transcript-header {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.8rem;
+}
+
+.transcript-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid rgba(123, 145, 208, 0.12);
+}
+
+.transcript-session-picker {
+  display: grid;
+  gap: 0.2rem;
+  min-width: min(100%, 22rem);
+}
+
+.transcript-session-picker select {
+  min-width: min(100%, 20rem);
+  max-width: 100%;
+}
+
+.transcript-toolbar-actions {
+  flex-wrap: wrap;
+}
+
 .transcript-meta-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.6rem 1rem;
+}
+
+.transcript-meta-grid > div,
+.transcript-item-header > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .transcript-list {

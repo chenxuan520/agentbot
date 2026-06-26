@@ -90,11 +90,19 @@ export interface SessionTranscriptMessage {
   parts: SessionTranscriptPart[]
 }
 
+export interface SessionTranscriptSessionOption {
+  sessionId: string
+  kind: string
+  label: string
+  topicKey?: string
+}
+
 export interface SessionTranscriptResponse {
   sessionId: string
   reset: boolean
   totalMessages: number
   latestMessageId: string
+  availableSessions: SessionTranscriptSessionOption[]
   messages: SessionTranscriptMessage[]
 }
 

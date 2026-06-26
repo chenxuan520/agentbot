@@ -1681,6 +1681,25 @@ func (s *fakeFlowStore) HasTopicSessions(ref conversation.Ref) (bool, error) {
 	return false, nil
 }
 
+func (s *fakeFlowStore) ListTopicSessions(ref conversation.Ref, limit int) ([]appstore.TopicSessionRecord, error) {
+	prefix := workspaceKey(ref) + ":"
+	items := make([]appstore.TopicSessionRecord, 0, len(s.topic))
+	for key, sessionID := range s.topic {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		items = append(items, appstore.TopicSessionRecord{
+			TopicKey:  strings.TrimPrefix(key, prefix),
+			SessionID: sessionID,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].TopicKey < items[j].TopicKey })
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
 func (s *fakeFlowStore) UpsertTopicSession(ref conversation.Ref, topicKey, sessionID string, updatedAt time.Time) error {
 	s.topic[workspaceKey(ref)+":"+topicKey] = sessionID
 	return nil

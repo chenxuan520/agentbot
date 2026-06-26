@@ -390,6 +390,10 @@ func (s *Service) TopicSessionID(ref conversation.Ref, topicKey string) (string,
 	return strings.TrimSpace(sessionID), nil
 }
 
+func (s *Service) ListTopicSessions(ref conversation.Ref, limit int) ([]appstore.TopicSessionRecord, error) {
+	return s.store.ListTopicSessions(ref, limit)
+}
+
 func (s *Service) Delete(ref conversation.Ref) error {
 	if s.workspaces != nil {
 		if err := s.workspaces.Delete(ref); err != nil {

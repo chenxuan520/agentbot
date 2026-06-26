@@ -20,6 +20,7 @@ import type {
   SessionTranscriptMessage,
   SessionTranscriptPart,
   SessionTranscriptResponse,
+  SessionTranscriptSessionOption,
   SkillSummary,
   SubagentSummary,
 } from '../types'
@@ -67,6 +68,7 @@ interface TranscriptState {
   sessionId: string
   latestMessageId: string
   totalMessages: number
+  availableSessions: SessionTranscriptSessionOption[]
   messages: SessionTranscriptMessage[]
 }
 
@@ -101,6 +103,13 @@ function writeSessionTabToQuery(tab: SessionTab) {
 
 function cloneSettings(settings: SessionSettings): SessionSettings {
   return JSON.parse(JSON.stringify(settings)) as SessionSettings
+}
+
+function formatJSONText(value: Record<string, unknown> | undefined): string {
+  if (!value || Object.keys(value).length === 0) {
+    return ''
+  }
+  return `${JSON.stringify(value, null, 2)}\n`
 }
 
 const remoteRouteLabels: Record<RemoteAgentRoute, string> = {
@@ -261,6 +270,7 @@ function createTranscriptState(): TranscriptState {
     sessionId: '',
     latestMessageId: '',
     totalMessages: 0,
+    availableSessions: [],
     messages: [],
   }
 }
@@ -284,6 +294,7 @@ function mergeTranscriptState(current: TranscriptState, incoming: SessionTranscr
       sessionId: incoming.sessionId,
       latestMessageId: incoming.latestMessageId,
       totalMessages: incoming.totalMessages,
+      availableSessions: incoming.availableSessions,
       messages,
     }
   }
@@ -300,6 +311,7 @@ function mergeTranscriptState(current: TranscriptState, incoming: SessionTranscr
     sessionId: incoming.sessionId,
     latestMessageId: incoming.latestMessageId || (messages.length ? messages[messages.length - 1].id : ''),
     totalMessages: incoming.totalMessages,
+    availableSessions: incoming.availableSessions,
     messages,
   }
 }
@@ -443,6 +455,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
   const [subagents, setSubagents] = useState<SubagentSummary[]>([])
   const [repos, setRepos] = useState<RepoSummary[]>([])
   const [settingsDraft, setSettingsDraft] = useState<SessionSettings | null>(null)
+  const [opencodeConfigText, setOpencodeConfigText] = useState('')
   const [remoteStatus, setRemoteStatus] = useState<RemoteAgentStatus | null>(null)
   const [agentsFile, setAgentsFile] = useState<SessionAgentsFile | null>(null)
   const [agentsModeDraft, setAgentsModeDraft] = useState<SessionAgentsMode>('template')
@@ -523,6 +536,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       const nextDetail = await api.getSessionDetail(sessionRef)
       setDetail(nextDetail)
       setSettingsDraft(cloneSettings(nextDetail.settings))
+      setOpencodeConfigText(formatJSONText(nextDetail.settings.agent.opencodeConfig))
       onDisplayInfoResolved?.(
         { provider: nextDetail.provider, conversationId: nextDetail.conversationId },
         { displayName: nextDetail.displayName, chatMode: nextDetail.chatMode },
@@ -606,6 +620,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
     setAgentsFile(null)
     setAgentsModeDraft('template')
     setAgentsContentDraft('')
+    setOpencodeConfigText('')
     setScheduleDraft(createScheduleDraft())
     setScheduleContentDrafts({})
     setTranscript(createTranscriptState())
@@ -651,9 +666,10 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
     transcriptLatestMessageRef.current = transcript.latestMessageId
   }, [transcript.latestMessageId, transcript.sessionId])
 
-  async function loadTranscript(options?: { reset?: boolean; loading?: boolean }) {
+  async function loadTranscript(options?: { reset?: boolean; loading?: boolean; sessionId?: string }) {
     const reset = options?.reset ?? false
     const loading = options?.loading ?? false
+    const requestedSessionID = (options?.sessionId ?? transcriptSessionRef.current).trim()
     const requestID = transcriptRequestRef.current + 1
     transcriptRequestRef.current = requestID
     if (loading) {
@@ -664,7 +680,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
     try {
       const nextTranscript = await api.getSessionTranscript(
         sessionRef,
-        reset ? '' : transcriptSessionRef.current,
+        requestedSessionID,
         reset ? '' : transcriptLatestMessageRef.current,
       )
       if (transcriptRequestRef.current !== requestID) {
@@ -737,12 +753,37 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
     if (!settingsDraft) {
       return
     }
+
+    let parsedOpencodeConfig: Record<string, unknown> | undefined
+    const trimmedOpencodeConfig = opencodeConfigText.trim()
+    if (trimmedOpencodeConfig) {
+      try {
+        const parsed = JSON.parse(trimmedOpencodeConfig) as Record<string, unknown>
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('必须是 JSON 对象')
+        }
+        parsedOpencodeConfig = parsed
+      } catch (error) {
+        setMessage(error instanceof Error ? `高级 OpenCode 配置无法解析: ${error.message}` : '高级 OpenCode 配置无法解析')
+        return
+      }
+    }
+
+    const parsedSettings = cloneSettings(settingsDraft)
+    parsedSettings.agent.backend = (parsedSettings.agent.backend || 'opencode').trim() || 'opencode'
+    if (parsedOpencodeConfig) {
+      parsedSettings.agent.opencodeConfig = parsedOpencodeConfig
+    } else {
+      delete parsedSettings.agent.opencodeConfig
+    }
+
     setSavingSettings(true)
     setMessage('')
     try {
-      const updated = await api.updateSessionSettings(sessionRef, settingsDraft)
+      const updated = await api.updateSessionSettings(sessionRef, parsedSettings)
       setDetail(updated)
       setSettingsDraft(cloneSettings(updated.settings))
+      setOpencodeConfigText(formatJSONText(updated.settings.agent.opencodeConfig))
       setAgentsFile(null)
       setAgentsModeDraft('template')
       setAgentsContentDraft('')
@@ -1357,6 +1398,20 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
                 </label>
               </div>
 
+              <div className="settings-card role-settings-card">
+                <div>
+                  <div className="panel-title">高级 OpenCode 配置</div>
+                  <div className="muted small">给当前 session 写 `opencodeConfig` patch。留空表示不写。</div>
+                </div>
+                <textarea
+                  className="role-advanced-textarea mono"
+                  value={opencodeConfigText}
+                  onChange={(event) => setOpencodeConfigText(event.target.value)}
+                  placeholder={'例如：\n{\n  "model": "gpt-5"\n}'}
+                  rows={8}
+                />
+              </div>
+
               <div className={`remote-status remote-status--${remoteStatusTone(remoteStatus)}`}>
                 <div className="remote-status-head">
                   <span className="remote-status-dot" />
@@ -1719,12 +1774,33 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
           {activeTab === 'transcript' ? (
             <div className="tab-panel transcript-tab-shell">
               <div className="settings-card transcript-panel-shell">
-                <div className="settings-card-header">
+                <div className="settings-card-header transcript-header">
                   <div>
                     <h3>Live Transcript</h3>
-                    <p className="muted">只看当前 main active session；优先看最近一条用户消息之后的内容，但总展示不超过 50 条。进入标签时加载一次，后续手动刷新。</p>
+                    <p className="muted">默认加载当前可用 session；在 `topic-session` 模式下可切换其他 topic session。优先看最近一条用户消息之后的内容，但总展示不超过 50 条。进入标签时加载一次，后续手动刷新。</p>
                   </div>
-                  <div className="inline-actions">
+                </div>
+
+                <div className="transcript-toolbar">
+                  {transcript.availableSessions.length ? (
+                    <label className="transcript-session-picker">
+                      <span className="muted small">Session</span>
+                      <select
+                        value={transcript.sessionId || ''}
+                        onChange={(event) => void loadTranscript({ loading: true, reset: true, sessionId: event.target.value })}
+                        disabled={transcriptRefreshing || transcriptLoading}
+                      >
+                        {transcript.availableSessions.map((item) => (
+                          <option key={`${item.sessionId}-${item.topicKey || item.kind}`} value={item.sessionId}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <div />
+                  )}
+                  <div className="inline-actions transcript-toolbar-actions">
                     <button type="button" className="toolbar-button subtle" onClick={() => void loadTranscript()} disabled={transcriptRefreshing || transcriptLoading}>
                       {transcriptRefreshing ? '刷新中...' : '刷新'}
                     </button>
@@ -1735,7 +1811,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
                 </div>
 
                 <div className="detail-submeta transcript-meta-grid">
-                  <div>active_session_id: <span className="mono">{detail.activeSessionId || '-'}</span></div>
+                  <div>main_active_session_id: <span className="mono">{detail.activeSessionId || '-'}</span></div>
                   <div>loaded_session_id: <span className="mono">{transcript.sessionId || '-'}</span></div>
                   <div>latest_message_id: <span className="mono">{transcript.latestMessageId || '-'}</span></div>
                   <div>message_count: visible <span className="mono">{visibleTranscriptMessages.length}</span> / loaded <span className="mono">{transcript.messages.length}</span> / total <span className="mono">{transcript.totalMessages}</span></div>
@@ -1743,8 +1819,8 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
 
                 {transcriptError ? <div className="info-banner">{transcriptError}</div> : null}
                 {transcriptLoading ? <div className="empty-state compact">正在加载 transcript...</div> : null}
-                {!transcriptLoading && !detail.activeSessionId ? <div className="empty-state compact">当前没有 main active session。</div> : null}
-                {!transcriptLoading && detail.activeSessionId && !visibleTranscriptMessages.length ? <div className="empty-state compact">当前 transcript 还没有可展示的消息。</div> : null}
+                {!transcriptLoading && !transcript.availableSessions.length ? <div className="empty-state compact">当前没有可展示的 transcript session。</div> : null}
+                {!transcriptLoading && transcript.availableSessions.length > 0 && !visibleTranscriptMessages.length ? <div className="empty-state compact">当前 transcript 还没有可展示的消息。</div> : null}
 
                 {visibleTranscriptMessages.length ? (
                   <div className="transcript-list">

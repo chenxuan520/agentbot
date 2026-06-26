@@ -239,6 +239,13 @@ func TestStoreTopicSessionRoundTrip(t *testing.T) {
 	if sessionID, err := store.GetTopicSession(ref, "om-root-a"); err != nil || sessionID != "session-a" {
 		t.Fatalf("topic session a = %q (err %v), want session-a", sessionID, err)
 	}
+	if listed, err := store.ListTopicSessions(ref, 10); err != nil {
+		t.Fatalf("list topic sessions: %v", err)
+	} else if len(listed) != 2 {
+		t.Fatalf("listed topic sessions = %d, want 2", len(listed))
+	} else if listed[0].TopicKey != "om-root-a" || listed[1].TopicKey != "om-root-b" {
+		t.Fatalf("unexpected topic sessions: %+v", listed)
+	}
 
 	// Upsert on the same key overwrites rather than duplicating.
 	if err := store.UpsertTopicSession(ref, "om-root-a", "session-a2", now.Add(time.Minute)); err != nil {

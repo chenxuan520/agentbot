@@ -19,6 +19,12 @@ type WorkspaceRecord struct {
 	UpdatedAt       time.Time
 }
 
+type TopicSessionRecord struct {
+	TopicKey  string
+	SessionID string
+	UpdatedAt time.Time
+}
+
 type SessionTokenRecord struct {
 	Provider        string
 	ConversationID  string
@@ -40,6 +46,7 @@ type WorkspaceStore interface {
 	DeleteBTWSessions(ref conversation.Ref) error
 	GetTopicSession(ref conversation.Ref, topicKey string) (string, error)
 	HasTopicSessions(ref conversation.Ref) (bool, error)
+	ListTopicSessions(ref conversation.Ref, limit int) ([]TopicSessionRecord, error)
 	UpsertTopicSession(ref conversation.Ref, topicKey, sessionID string, updatedAt time.Time) error
 	DeleteTopicSession(ref conversation.Ref, topicKey string) error
 	DeleteTopicSessions(ref conversation.Ref) error

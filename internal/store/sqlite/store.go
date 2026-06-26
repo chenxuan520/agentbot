@@ -346,6 +346,38 @@ func (s *Store) HasTopicSessions(ref conversation.Ref) (bool, error) {
 	return true, nil
 }
 
+func (s *Store) ListTopicSessions(ref conversation.Ref, limit int) ([]appstore.TopicSessionRecord, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.Query(`
+		SELECT topic_key, session_id, updated_at
+		FROM conversation_topic_sessions
+		WHERE provider = ? AND conversation_id = ?
+		ORDER BY updated_at DESC, topic_key ASC
+		LIMIT ?
+	`, ref.Provider, ref.ConversationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []appstore.TopicSessionRecord{}
+	for rows.Next() {
+		var item appstore.TopicSessionRecord
+		var updatedAt int64
+		if err := rows.Scan(&item.TopicKey, &item.SessionID, &updatedAt); err != nil {
+			return nil, err
+		}
+		item.UpdatedAt = time.Unix(updatedAt, 0).UTC()
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func (s *Store) UpsertTopicSession(ref conversation.Ref, topicKey, sessionID string, updatedAt time.Time) error {
 	_, err := s.db.Exec(`
 		INSERT INTO conversation_topic_sessions (

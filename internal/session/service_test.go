@@ -1344,6 +1344,10 @@ func (s *deleteFallbackStore) HasTopicSessions(conversation.Ref) (bool, error) {
 	return false, nil
 }
 
+func (s *deleteFallbackStore) ListTopicSessions(conversation.Ref, int) ([]appstore.TopicSessionRecord, error) {
+	return nil, nil
+}
+
 func (s *deleteFallbackStore) UpsertTopicSession(conversation.Ref, string, string, time.Time) error {
 	return nil
 }

@@ -25,7 +25,8 @@ import (
 )
 
 type fakeAdminTranscriptBackend struct {
-	messages []backend.SessionMessage
+	messages        []backend.SessionMessage
+	sessionMessages map[string][]backend.SessionMessage
 }
 
 type fakeAdminDisplayProvider struct {
@@ -41,7 +42,10 @@ func (f fakeAdminTranscriptBackend) AbortSession(context.Context, string) error 
 func (f fakeAdminTranscriptBackend) Prompt(context.Context, string, string, string, []backend.Attachment, backend.PromptOptions) (backend.PromptResult, error) {
 	return backend.PromptResult{}, nil
 }
-func (f fakeAdminTranscriptBackend) GetSessionMessages(context.Context, string) ([]backend.SessionMessage, error) {
+func (f fakeAdminTranscriptBackend) GetSessionMessages(_ context.Context, sessionID string) ([]backend.SessionMessage, error) {
+	if f.sessionMessages != nil {
+		return append([]backend.SessionMessage(nil), f.sessionMessages[strings.TrimSpace(sessionID)]...), nil
+	}
 	return append([]backend.SessionMessage(nil), f.messages...), nil
 }
 
@@ -275,6 +279,9 @@ func TestAdminSessionTranscriptSupportsSnapshotAndIncrementalPolling(t *testing.
 	if snapshotBody.SessionID != "session-main" {
 		t.Fatalf("session id = %q", snapshotBody.SessionID)
 	}
+	if len(snapshotBody.AvailableSessions) != 1 || snapshotBody.AvailableSessions[0].SessionID != "session-main" {
+		t.Fatalf("unexpected available sessions: %+v", snapshotBody.AvailableSessions)
+	}
 	if snapshotBody.TotalMessages != 3 || snapshotBody.LatestMessageID != "msg-3" {
 		t.Fatalf("unexpected transcript meta: %+v", snapshotBody)
 	}
@@ -307,6 +314,95 @@ func TestAdminSessionTranscriptSupportsSnapshotAndIncrementalPolling(t *testing.
 	}
 }
 
+func TestAdminSessionTranscriptSupportsSelectingTopicSession(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTemplate(t, root)
+
+	cfg := config.Default(root)
+	cfg.ProjectToken = "project-token"
+	cfg.AuthSecret = "auth-secret"
+	store, err := storesqlite.Open(cfg.DBPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	manager := workspace.NewManager(cfg, store)
+	sessions := session.NewService(store, manager)
+	access := accesstoken.NewService(store, cfg.ProjectToken, cfg.AuthSecret)
+	server := New(cfg, nil, nil, sessions, nil, access)
+	server.backends = func(config.Config, workspace.Settings) (backend.Client, error) {
+		return fakeAdminTranscriptBackend{sessionMessages: map[string][]backend.SessionMessage{
+			"topic-sess-1": {
+				{ID: "topic-a-1", Role: "user", CreatedAt: 1, Parts: []backend.SessionMessagePart{{Type: "text", Text: "topic a"}}},
+			},
+			"topic-sess-2": {
+				{ID: "topic-b-1", Role: "user", CreatedAt: 2, Parts: []backend.SessionMessagePart{{Type: "text", Text: "topic b"}}},
+				{ID: "topic-b-2", Role: "assistant", CreatedAt: 3, Parts: []backend.SessionMessagePart{{Type: "text", Text: "done"}}},
+			},
+		}}, nil
+	}
+	router := server.router()
+
+	ref := conversation.Ref{Provider: "feishu", ConversationID: "chat-topic"}
+	current, err := sessions.Current(ref)
+	if err != nil {
+		t.Fatalf("prepare session: %v", err)
+	}
+	settings := current.Workspace.Settings
+	settings.Settings.ReplyMode = workspace.ReplyModeTopicSession
+	if err := workspace.SaveSettings(current.Workspace.Path, settings); err != nil {
+		t.Fatalf("save topic-session mode: %v", err)
+	}
+	if err := sessions.BindTopic(ref, "om-root-a", "opencode", "topic-sess-1", time.Now().UTC().Add(-time.Minute)); err != nil {
+		t.Fatalf("bind topic session a: %v", err)
+	}
+	if err := sessions.BindTopic(ref, "om-root-b", "opencode", "topic-sess-2", time.Now().UTC()); err != nil {
+		t.Fatalf("bind topic session b: %v", err)
+	}
+
+	defaultReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/sessions/feishu/chat-topic/transcript", nil)
+	defaultReq.Header.Set("Authorization", "Bearer "+cfg.ProjectToken)
+	defaultResp := httptest.NewRecorder()
+	router.ServeHTTP(defaultResp, defaultReq)
+	if defaultResp.Code != http.StatusOK {
+		t.Fatalf("default status = %d, body=%s", defaultResp.Code, defaultResp.Body.String())
+	}
+	var defaultBody adminTranscriptResponse
+	if err := json.Unmarshal(defaultResp.Body.Bytes(), &defaultBody); err != nil {
+		t.Fatalf("decode default transcript: %v", err)
+	}
+	if defaultBody.SessionID != "topic-sess-2" {
+		t.Fatalf("default session id = %q, want latest topic session", defaultBody.SessionID)
+	}
+	if len(defaultBody.AvailableSessions) != 2 {
+		t.Fatalf("available sessions = %+v, want two topic sessions", defaultBody.AvailableSessions)
+	}
+	if defaultBody.AvailableSessions[0].SessionID != "topic-sess-2" || defaultBody.AvailableSessions[0].Kind != "topic" {
+		t.Fatalf("unexpected first available session: %+v", defaultBody.AvailableSessions[0])
+	}
+
+	selectedReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/sessions/feishu/chat-topic/transcript?sessionId=topic-sess-1", nil)
+	selectedReq.Header.Set("Authorization", "Bearer "+cfg.ProjectToken)
+	selectedResp := httptest.NewRecorder()
+	router.ServeHTTP(selectedResp, selectedReq)
+	if selectedResp.Code != http.StatusOK {
+		t.Fatalf("selected status = %d, body=%s", selectedResp.Code, selectedResp.Body.String())
+	}
+	var selectedBody adminTranscriptResponse
+	if err := json.Unmarshal(selectedResp.Body.Bytes(), &selectedBody); err != nil {
+		t.Fatalf("decode selected transcript: %v", err)
+	}
+	if selectedBody.SessionID != "topic-sess-1" {
+		t.Fatalf("selected session id = %q, want requested topic session", selectedBody.SessionID)
+	}
+	if len(selectedBody.Messages) != 1 || selectedBody.Messages[0].ID != "topic-a-1" {
+		t.Fatalf("unexpected selected transcript messages: %+v", selectedBody.Messages)
+	}
+}
+
 func TestBuildTranscriptResponseSnapshotStartsFromLatestUser(t *testing.T) {
 	t.Parallel()
 
@@ -317,7 +413,7 @@ func TestBuildTranscriptResponseSnapshotStartsFromLatestUser(t *testing.T) {
 		{ID: "msg-4", Role: "assistant", CreatedAt: 4, Parts: []backend.SessionMessagePart{{Type: "text", Text: "after user"}}},
 	}
 
-	resp := buildTranscriptResponse("session-main", "", "", messages)
+	resp := buildTranscriptResponse("session-main", "", "", messages, nil)
 	if !resp.Reset {
 		t.Fatal("expected reset snapshot")
 	}
@@ -343,7 +439,7 @@ func TestBuildTranscriptResponseSnapshotCapsLatestUserSegmentToWindowSize(t *tes
 		})
 	}
 
-	resp := buildTranscriptResponse("session-main", "", "", messages)
+	resp := buildTranscriptResponse("session-main", "", "", messages, nil)
 	if !resp.Reset {
 		t.Fatal("expected reset snapshot")
 	}
@@ -363,7 +459,7 @@ func TestBuildTranscriptResponseIncrementalIncludesUpdatedLatestMessage(t *testi
 		{ID: "msg-2", Role: "assistant", CreatedAt: 2, Parts: []backend.SessionMessagePart{{Type: "tool", Tool: "grep", ToolStatus: "running"}, {Type: "text", Text: "partial"}}},
 	}
 
-	resp := buildTranscriptResponse("session-main", "session-main", "msg-2", messages)
+	resp := buildTranscriptResponse("session-main", "session-main", "msg-2", messages, nil)
 	if resp.Reset {
 		t.Fatal("expected incremental response")
 	}
