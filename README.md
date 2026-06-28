@@ -370,6 +370,12 @@ data/chats/<provider>/<conversation-id>/
 - 回复仍然在 thread / topic 里
 - 但 backend session 不再整会话共享，而是按 topic 隔离
 
+在 `topic-session` 模式下，针对 session 的命令也按 topic 生效：
+
+- 在某个话题里执行 `/peek`、`/compress`、`/abort`、`/attach`、`/clear`、`/new`，都作用于该话题自己的 session
+- 在话题外执行 `/peek`、`/compress`、`/abort`、`/attach` 会提示先进入具体话题
+- 在话题外执行 `/clear`、`/new` 则重置整个会话的所有话题 session
+
 除此之外，还支持：
 
 - `/btw <text>`：同一会话里为“当前发送者”单独维护一个 btw session

@@ -14,12 +14,47 @@ import (
 	"github.com/chenxuan520/agentbot/internal/workspace"
 )
 
-const helpText = "**可用命令**\n1. `/help` 查看帮助\n2. `/info` 查看当前会话信息\n3. `/peek` 查看当前 session 的最新输出快照\n4. `/roles` 查看或切换当前会话 role\n5. `/compress` 对当前 session 执行 `/compact`\n6. `/new` 重置当前 session，下一条普通消息新建\n7. `/attach <session-id>` 绑定同一 workspace path 下的 opencode session\n8. `/clear` 清空当前会话绑定的 session\n9. `/abort` 中断当前会话里正在跑的 agent\n10. `/unblock` 解除当前会话的 refuse 屏蔽\n11. `/btw <text>` 使用你在当前对话里的独立 btw session 处理这条消息\n12. `/btw-clear` 清空你在当前对话里的 btw session\n13. `/connect-local` 把当前会话切到已连接的本地 agent\n14. `/connect-bot` 切回 bot（本地 agent 仍保持连接）\n15. `/disconnect-local` 强制断开本地 agent 连接"
+const helpText = "**可用命令**\n1. `/help` 查看帮助\n2. `/info` 查看当前会话信息\n3. `/peek` 查看当前 session 的最新输出快照\n4. `/roles` 查看或切换当前会话 role\n5. `/compress` 对当前 session 执行 `/compact`\n6. `/new` 重置当前 session，下一条普通消息新建\n7. `/attach <session-id>` 绑定同一 workspace path 下的 opencode session\n8. `/clear` 清空当前会话绑定的 session\n9. `/abort` 中断当前会话里正在跑的 agent\n10. `/unblock` 解除当前会话的 refuse 屏蔽\n11. `/btw <text>` 使用你在当前对话里的独立 btw session 处理这条消息\n12. `/btw-clear` 清空你在当前对话里的 btw session\n13. `/connect-local` 把当前会话切到已连接的本地 agent\n14. `/connect-bot` 切回 bot（本地 agent 仍保持连接）\n15. `/disconnect-local` 强制断开本地 agent 连接\n\n_topic-session 模式：针对 session 的命令（`/peek` `/clear` `/new` `/compress` `/abort` `/attach`）作用于命令所在话题。在话题外执行 `/peek` `/compress` `/abort` `/attach` 会提示先进入话题；`/clear` `/new` 在话题外则重置整个会话的所有话题 session。_"
 
 type commandResult struct {
 	handled   bool
 	replyText string
 	viaAgent  bool
+}
+
+// topicCommandTopLevelHint is returned when a session-scoped command is issued
+// at top level in topic-session reply mode, where there is no thread context to
+// pick a topic from.
+const topicCommandTopLevelHint = "topic-session 模式下，请在具体话题（消息所在 thread）里执行 `%s`。"
+
+// commandSession describes which backend session a session-scoped command
+// (/peek, /compress, /abort, /attach) should act on, accounting for the
+// topic-session reply mode where each topic owns an isolated session.
+type commandSession struct {
+	topicMode bool   // conversation runs in topic-session reply mode
+	topLevel  bool   // topicMode AND no thread context: command must refuse
+	topicKey  string // resolved topic key when issued inside a thread
+	sessionID string // target session id (main session, or the topic session)
+}
+
+// resolveCommandSession maps a command to its target session. In non-topic
+// modes it keeps the historical behavior of acting on the main active session.
+// In topic-session mode it binds to the topic the command was issued in, and
+// flags top-level commands so callers can refuse with guidance.
+func (s *Service) resolveCommandSession(ref conversation.Ref, input TextInput, current *session.CurrentSession) (commandSession, error) {
+	replyMode := current.Workspace.Settings.Settings.ReplyMode
+	if !workspace.IsTopicSessionReplyMode(replyMode) {
+		return commandSession{sessionID: current.ActiveSessionID}, nil
+	}
+	topicKey := topicKeyForCommand(input, replyMode)
+	if topicKey == "" {
+		return commandSession{topicMode: true, topLevel: true}, nil
+	}
+	sessionID, err := s.sessions.TopicSessionID(ref, topicKey)
+	if err != nil {
+		return commandSession{}, err
+	}
+	return commandSession{topicMode: true, topicKey: topicKey, sessionID: sessionID}, nil
 }
 
 func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input TextInput) (commandResult, error) {
@@ -32,12 +67,26 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 	case "/help":
 		return commandResult{handled: true, replyText: helpText}, nil
 	case "/abort":
-		aborted, err := s.abortCurrentSession(ctx, ref)
+		current, err := s.sessions.Current(ref)
 		if err != nil {
 			return commandResult{}, err
 		}
-		if !aborted {
+		target, err := s.resolveCommandSession(ref, input, current)
+		if err != nil {
+			return commandResult{}, err
+		}
+		if target.topLevel {
+			return commandResult{handled: true, replyText: fmt.Sprintf(topicCommandTopLevelHint, "/abort")}, nil
+		}
+		if strings.TrimSpace(target.sessionID) == "" {
 			return commandResult{handled: true, replyText: "当前对话没有可中断的 active session。"}, nil
+		}
+		client, err := s.backends(s.cfg, current.Workspace.Settings)
+		if err != nil {
+			return commandResult{}, err
+		}
+		if err := client.AbortSession(ctx, target.sessionID); err != nil {
+			return commandResult{}, err
 		}
 		return commandResult{handled: true, replyText: "已向当前会话发送中断请求。"}, nil
 	case "/unblock":
@@ -79,8 +128,15 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 		if err != nil {
 			return commandResult{}, err
 		}
-		if strings.TrimSpace(current.ActiveSessionID) == "" {
-			return commandResult{handled: true, replyText: "当前对话没有 active session。先发一条普通消息创建 session，再执行 `/peek`。"}, nil
+		target, err := s.resolveCommandSession(ref, input, current)
+		if err != nil {
+			return commandResult{}, err
+		}
+		if target.topLevel {
+			return commandResult{handled: true, replyText: fmt.Sprintf(topicCommandTopLevelHint, "/peek")}, nil
+		}
+		if strings.TrimSpace(target.sessionID) == "" {
+			return commandResult{handled: true, replyText: noSessionHint(target, "/peek")}, nil
 		}
 		client, err := s.backends(s.cfg, current.Workspace.Settings)
 		if err != nil {
@@ -90,7 +146,7 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 		if !ok {
 			return commandResult{handled: true, replyText: fmt.Sprintf("当前 backend `%s` 不支持 `/peek`。", current.AgentBackend)}, nil
 		}
-		messages, err := lookup.GetSessionMessages(ctx, current.ActiveSessionID)
+		messages, err := lookup.GetSessionMessages(ctx, target.sessionID)
 		if err != nil {
 			return commandResult{handled: true, replyText: fmt.Sprintf("读取当前会话输出快照失败：%s", err)}, nil
 		}
@@ -100,7 +156,7 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 				transcriptURL = buildConsoleURLWithTab(s.cfg.WebBaseURL, token, "transcript")
 			}
 		}
-		return commandResult{handled: true, replyText: buildPeekText(current.ActiveSessionID, messages, transcriptURL)}, nil
+		return commandResult{handled: true, replyText: buildPeekText(target.sessionID, messages, transcriptURL)}, nil
 	case "/roles":
 		if len(args) == 0 {
 			current, err := s.sessions.Current(ref)
@@ -126,18 +182,25 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 		if err != nil {
 			return commandResult{}, err
 		}
-		if current.ActiveSessionID == "" {
-			return commandResult{handled: true, replyText: "当前对话还没有 active session。先发一条普通消息创建 session，再执行 `/compress`。"}, nil
+		target, err := s.resolveCommandSession(ref, input, current)
+		if err != nil {
+			return commandResult{}, err
+		}
+		if target.topLevel {
+			return commandResult{handled: true, replyText: fmt.Sprintf(topicCommandTopLevelHint, "/compress")}, nil
+		}
+		if strings.TrimSpace(target.sessionID) == "" {
+			return commandResult{handled: true, replyText: noSessionHint(target, "/compress")}, nil
 		}
 		client, err := s.backends(s.cfg, current.Workspace.Settings)
 		if err != nil {
 			return commandResult{}, err
 		}
-		result, err := client.Prompt(ctx, current.Workspace.Path, current.ActiveSessionID, "/compact", nil, backend.PromptOptions{})
+		result, err := client.Prompt(ctx, current.Workspace.Path, target.sessionID, "/compact", nil, backend.PromptOptions{})
 		if err != nil {
 			return commandResult{}, err
 		}
-		if err := s.sessions.Bind(ref, current.AgentBackend, result.SessionID, time.Now().UTC()); err != nil {
+		if err := s.bindCommandSession(ref, target, current.AgentBackend, result.SessionID); err != nil {
 			return commandResult{}, err
 		}
 		return commandResult{handled: true, replyText: result.ReplyText, viaAgent: true}, nil
@@ -146,14 +209,11 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 		if err != nil {
 			return commandResult{}, err
 		}
-		hadSession := current.ActiveSessionID != ""
-		if err := s.sessions.ClearActive(ref); err != nil {
+		outcome, err := s.clearCommandSessions(ref, input, current)
+		if err != nil {
 			return commandResult{}, err
 		}
-		if hadSession {
-			return commandResult{handled: true, replyText: "已清空当前对话的旧 session。下一条消息会创建新的 session。"}, nil
-		}
-		return commandResult{handled: true, replyText: "当前对话还没有 session。下一条消息会创建新的 session。"}, nil
+		return commandResult{handled: true, replyText: newSessionReply(outcome)}, nil
 	case "/attach":
 		if len(args) != 1 {
 			return commandResult{handled: true, replyText: "用法：`/attach <session-id>`。"}, nil
@@ -161,6 +221,13 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 		current, err := s.sessions.Current(ref)
 		if err != nil {
 			return commandResult{}, err
+		}
+		target, err := s.resolveCommandSession(ref, input, current)
+		if err != nil {
+			return commandResult{}, err
+		}
+		if target.topLevel {
+			return commandResult{handled: true, replyText: fmt.Sprintf(topicCommandTopLevelHint, "/attach")}, nil
 		}
 		if current.AgentBackend != "opencode" {
 			return commandResult{handled: true, replyText: fmt.Sprintf("当前 backend `%s` 不支持 `/attach`，目前只支持 opencode session。", current.AgentBackend)}, nil
@@ -184,7 +251,7 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 		if info.Directory != current.Workspace.Path {
 			return commandResult{handled: true, replyText: "当前 `/attach` 只支持同一个 workspace path 下的 session，暂不支持跨 workspace attach。"}, nil
 		}
-		if err := s.sessions.Bind(ref, current.AgentBackend, sessionID, time.Now().UTC()); err != nil {
+		if err := s.bindCommandSession(ref, target, current.AgentBackend, sessionID); err != nil {
 			return commandResult{}, err
 		}
 		return commandResult{handled: true, replyText: fmt.Sprintf("已将当前对话 attach 到 session `%s`。下一条普通消息会继续这个 session。", sessionID)}, nil
@@ -193,14 +260,11 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 		if err != nil {
 			return commandResult{}, err
 		}
-		hadSession := current.ActiveSessionID != ""
-		if err := s.sessions.ClearActive(ref); err != nil {
+		outcome, err := s.clearCommandSessions(ref, input, current)
+		if err != nil {
 			return commandResult{}, err
 		}
-		if hadSession {
-			return commandResult{handled: true, replyText: "已清空当前对话的 session。"}, nil
-		}
-		return commandResult{handled: true, replyText: "当前对话没有可清空的 session。"}, nil
+		return commandResult{handled: true, replyText: clearSessionReply(outcome)}, nil
 	case "/btw":
 		if len(args) == 0 {
 			return commandResult{handled: true, replyText: "用法：`/btw <text>`。它会使用你在当前对话里的独立 btw session，不影响主 session。"}, nil
@@ -599,21 +663,114 @@ func (s *Service) cancelActiveRefuse(ref conversation.Ref) (int, error) {
 	return s.control.CancelActiveRefuse(ref, time.Now().UTC())
 }
 
-func (s *Service) abortCurrentSession(ctx context.Context, ref conversation.Ref) (bool, error) {
-	current, err := s.sessions.Current(ref)
-	if err != nil {
-		return false, err
+// noSessionHint phrases the "no session yet" reply for a session-scoped command,
+// distinguishing the per-topic case from the conversation-wide one.
+func noSessionHint(target commandSession, command string) string {
+	if target.topicMode {
+		return fmt.Sprintf("这个话题还没有 session。先在该话题里发一条普通消息创建 session，再执行 `%s`。", command)
 	}
-	if strings.TrimSpace(current.ActiveSessionID) == "" {
-		return false, nil
-	}
+	return fmt.Sprintf("当前对话没有 active session。先发一条普通消息创建 session，再执行 `%s`。", command)
+}
 
-	client, err := s.backends(s.cfg, current.Workspace.Settings)
+// bindCommandSession persists a session id produced by a command back to the
+// slot the command targeted: the per-topic session in topic-session mode, or
+// the main session otherwise.
+func (s *Service) bindCommandSession(ref conversation.Ref, target commandSession, backendName, sessionID string) error {
+	now := time.Now().UTC()
+	if target.topicMode {
+		return s.sessions.BindTopic(ref, target.topicKey, backendName, sessionID, now)
+	}
+	return s.sessions.Bind(ref, backendName, sessionID, now)
+}
+
+// commandClearOutcome captures what a /clear or /new reset actually did so the
+// command can phrase its reply.
+type commandClearOutcome struct {
+	scope string // "main", "topic", or "all"
+	had   bool   // whether anything was cleared
+}
+
+// clearCommandSessions resets the session(s) a /clear or /new should affect: the
+// current topic when issued inside a thread, every topic plus the main session
+// at top level in topic-session mode, or just the main session otherwise.
+func (s *Service) clearCommandSessions(ref conversation.Ref, input TextInput, current *session.CurrentSession) (commandClearOutcome, error) {
+	target, err := s.resolveCommandSession(ref, input, current)
 	if err != nil {
-		return false, err
+		return commandClearOutcome{}, err
 	}
-	if err := client.AbortSession(ctx, current.ActiveSessionID); err != nil {
-		return false, err
+	switch {
+	case target.topicMode && target.topLevel:
+		had, err := s.hasAnySession(ref, current)
+		if err != nil {
+			return commandClearOutcome{}, err
+		}
+		if err := s.sessions.ClearAllTopics(ref); err != nil {
+			return commandClearOutcome{}, err
+		}
+		if err := s.sessions.ClearActive(ref); err != nil {
+			return commandClearOutcome{}, err
+		}
+		return commandClearOutcome{scope: "all", had: had}, nil
+	case target.topicMode:
+		had := strings.TrimSpace(target.sessionID) != ""
+		if err := s.sessions.ClearTopic(ref, target.topicKey); err != nil {
+			return commandClearOutcome{}, err
+		}
+		return commandClearOutcome{scope: "topic", had: had}, nil
+	default:
+		had := strings.TrimSpace(current.ActiveSessionID) != ""
+		if err := s.sessions.ClearActive(ref); err != nil {
+			return commandClearOutcome{}, err
+		}
+		return commandClearOutcome{scope: "main", had: had}, nil
 	}
-	return true, nil
+}
+
+// hasAnySession reports whether the conversation has any session worth clearing,
+// counting both the main slot and per-topic sessions.
+func (s *Service) hasAnySession(ref conversation.Ref, current *session.CurrentSession) (bool, error) {
+	if strings.TrimSpace(current.ActiveSessionID) != "" {
+		return true, nil
+	}
+	return s.sessions.HasTopicSessions(ref)
+}
+
+func clearSessionReply(outcome commandClearOutcome) string {
+	switch outcome.scope {
+	case "topic":
+		if outcome.had {
+			return "已清空当前话题的 session。"
+		}
+		return "当前话题没有可清空的 session。"
+	case "all":
+		if outcome.had {
+			return "已清空当前会话的所有话题 session（整会话重置）。"
+		}
+		return "当前会话没有可清空的 session。"
+	default:
+		if outcome.had {
+			return "已清空当前对话的 session。"
+		}
+		return "当前对话没有可清空的 session。"
+	}
+}
+
+func newSessionReply(outcome commandClearOutcome) string {
+	switch outcome.scope {
+	case "topic":
+		if outcome.had {
+			return "已清空当前话题的旧 session。该话题的下一条消息会创建新的 session。"
+		}
+		return "当前话题还没有 session。该话题的下一条消息会创建新的 session。"
+	case "all":
+		if outcome.had {
+			return "已清空当前会话的所有话题 session（整会话重置）。下一条消息会创建新的 session。"
+		}
+		return "当前会话还没有 session。下一条消息会创建新的 session。"
+	default:
+		if outcome.had {
+			return "已清空当前对话的旧 session。下一条消息会创建新的 session。"
+		}
+		return "当前对话还没有 session。下一条消息会创建新的 session。"
+	}
 }

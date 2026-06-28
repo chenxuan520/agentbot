@@ -378,6 +378,19 @@ func (s *Service) ClearTopic(ref conversation.Ref, topicKey string) error {
 	return s.store.DeleteTopicSession(ref, topicKey)
 }
 
+// HasTopicSessions reports whether the conversation has any per-topic session,
+// used by control-plane commands to phrase their reset replies in
+// topic-session reply mode.
+func (s *Service) HasTopicSessions(ref conversation.Ref) (bool, error) {
+	return s.store.HasTopicSessions(ref)
+}
+
+// ClearAllTopics drops every per-topic session of the conversation. It backs the
+// top-level /clear and /new full-conversation reset in topic-session mode.
+func (s *Service) ClearAllTopics(ref conversation.Ref) error {
+	return s.store.DeleteTopicSessions(ref)
+}
+
 func (s *Service) TopicSessionID(ref conversation.Ref, topicKey string) (string, error) {
 	topicKey = strings.TrimSpace(topicKey)
 	if topicKey == "" {

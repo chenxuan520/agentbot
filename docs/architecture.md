@@ -64,7 +64,17 @@ session 生命周期由 sqlite 中的 `conversation_workspaces` 记录驱动：
 - 主普通消息继续复用/轮换 `active_session_id`
 - `/btw` 只复用/创建当前发送者自己的 btw session
 - `/btw-clear` 只清空当前发送者自己的 btw session
-- v1 不改 `/clear`、`/new`、`/peek`、`/roles`、`/abort` 等既有命令语义
+- BTW 槽位本身不改 `/clear`、`/new`、`/peek`、`/roles`、`/abort` 等既有命令语义
+
+## 命令与 topic-session
+
+普通消息在 `topic-session` 模式下按 topic 隔离 session，针对 session 的命令也随之 topic-aware（见 `internal/flow/command.go` 的 `resolveCommandSession`）：
+
+- 在某个话题（thread）里执行 `/peek`、`/compress`、`/abort`、`/attach`、`/clear`、`/new`，一律作用于该话题对应的 topic session。
+- 在话题外（顶层、无 thread 上下文）执行 `/peek`、`/compress`、`/abort`、`/attach`：不动任何 session，提示先进入具体话题。
+- 在话题外执行 `/clear`、`/new`：清空该会话的所有 topic session 加主 session（整会话重置）。
+- 其它回复模式（`direct` / `topic` / `thread`）行为不变，命令仍作用于主 `active_session_id`。
+- `/info` 在话题内会额外显示 `topic_id` / `topic_session_id`。
 
 ## 同会话并发
 

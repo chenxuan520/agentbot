@@ -1347,6 +1347,310 @@ func TestInfoCommandHidesTopicFieldsOutsideTopicMode(t *testing.T) {
 	}
 }
 
+func TestPeekCommandTargetsTopicSessionInThread(t *testing.T) {
+	t.Parallel()
+
+	service, fakeProvider, _, _, _, ref := newTestFlowService(t)
+	enableTopicSessionMode(t, service, ref)
+	if err := service.sessions.BindTopic(ref, "om-root-a", "opencode", "sess-a", time.Now().UTC()); err != nil {
+		t.Fatalf("bind topic a: %v", err)
+	}
+	if err := service.sessions.BindTopic(ref, "om-root-b", "opencode", "sess-b", time.Now().UTC()); err != nil {
+		t.Fatalf("bind topic b: %v", err)
+	}
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider: ref.Provider, ConversationID: ref.ConversationID, ConversationType: "thread",
+		MessageID: "om-peek", RootMessageID: "om-root-a", SenderID: "ou-user", Text: "/peek",
+	})
+	if err != nil {
+		t.Fatalf("process peek: %v", err)
+	}
+	if !strings.Contains(result.ReplyText, "session_id: sess-a") {
+		t.Fatalf("peek should target topic A session: %q", result.ReplyText)
+	}
+	if strings.Contains(result.ReplyText, "sess-b") {
+		t.Fatalf("peek leaked another topic session: %q", result.ReplyText)
+	}
+	if len(fakeProvider.replies) != 1 || fakeProvider.replies[0].messageID != "om-peek" {
+		t.Fatalf("unexpected replies: %+v", fakeProvider.replies)
+	}
+}
+
+func TestPeekCommandRefusesAtTopLevelInTopicMode(t *testing.T) {
+	t.Parallel()
+
+	service, _, _, _, _, ref := newTestFlowService(t)
+	enableTopicSessionMode(t, service, ref)
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider: ref.Provider, ConversationID: ref.ConversationID, ConversationType: "group",
+		MessageID: "om-peek", SenderID: "ou-user", Text: "/peek",
+	})
+	if err != nil {
+		t.Fatalf("process peek: %v", err)
+	}
+	if !strings.Contains(result.ReplyText, "请在具体话题") {
+		t.Fatalf("expected top-level refuse hint: %q", result.ReplyText)
+	}
+}
+
+func TestClearCommandClearsOnlyCurrentTopicInThread(t *testing.T) {
+	t.Parallel()
+
+	service, _, _, _, _, ref := newTestFlowService(t)
+	enableTopicSessionMode(t, service, ref)
+	if err := service.sessions.BindTopic(ref, "om-root-a", "opencode", "sess-a", time.Now().UTC()); err != nil {
+		t.Fatalf("bind topic a: %v", err)
+	}
+	if err := service.sessions.BindTopic(ref, "om-root-b", "opencode", "sess-b", time.Now().UTC()); err != nil {
+		t.Fatalf("bind topic b: %v", err)
+	}
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider: ref.Provider, ConversationID: ref.ConversationID, ConversationType: "thread",
+		MessageID: "om-clear", RootMessageID: "om-root-a", SenderID: "ou-user", Text: "/clear",
+	})
+	if err != nil {
+		t.Fatalf("process clear: %v", err)
+	}
+	if !strings.Contains(result.ReplyText, "已清空当前话题的 session") {
+		t.Fatalf("unexpected clear reply: %q", result.ReplyText)
+	}
+	if got, _ := service.sessions.TopicSessionID(ref, "om-root-a"); got != "" {
+		t.Fatalf("topic A session = %q, want cleared", got)
+	}
+	if got, _ := service.sessions.TopicSessionID(ref, "om-root-b"); got != "sess-b" {
+		t.Fatalf("topic B session = %q, want sess-b intact", got)
+	}
+}
+
+func TestClearCommandTopLevelResetsAllTopics(t *testing.T) {
+	t.Parallel()
+
+	service, _, _, _, _, ref := newTestFlowService(t)
+	enableTopicSessionMode(t, service, ref)
+	if err := service.sessions.BindTopic(ref, "om-root-a", "opencode", "sess-a", time.Now().UTC()); err != nil {
+		t.Fatalf("bind topic a: %v", err)
+	}
+	if err := service.sessions.BindTopic(ref, "om-root-b", "opencode", "sess-b", time.Now().UTC()); err != nil {
+		t.Fatalf("bind topic b: %v", err)
+	}
+	if err := service.sessions.Bind(ref, "opencode", "sess-main", time.Now().UTC()); err != nil {
+		t.Fatalf("bind main: %v", err)
+	}
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider: ref.Provider, ConversationID: ref.ConversationID, ConversationType: "group",
+		MessageID: "om-clear", SenderID: "ou-user", Text: "/clear",
+	})
+	if err != nil {
+		t.Fatalf("process clear: %v", err)
+	}
+	if !strings.Contains(result.ReplyText, "所有话题 session") {
+		t.Fatalf("unexpected top-level clear reply: %q", result.ReplyText)
+	}
+	if got, _ := service.sessions.TopicSessionID(ref, "om-root-a"); got != "" {
+		t.Fatalf("topic A session = %q, want cleared", got)
+	}
+	if got, _ := service.sessions.TopicSessionID(ref, "om-root-b"); got != "" {
+		t.Fatalf("topic B session = %q, want cleared", got)
+	}
+	current, err := service.sessions.Current(ref)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+	if current.ActiveSessionID != "" {
+		t.Fatalf("main session = %q, want cleared", current.ActiveSessionID)
+	}
+}
+
+func TestNewCommandResetsCurrentTopicInThread(t *testing.T) {
+	t.Parallel()
+
+	service, _, _, _, _, ref := newTestFlowService(t)
+	enableTopicSessionMode(t, service, ref)
+	if err := service.sessions.BindTopic(ref, "om-root-a", "opencode", "sess-a", time.Now().UTC()); err != nil {
+		t.Fatalf("bind topic a: %v", err)
+	}
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider: ref.Provider, ConversationID: ref.ConversationID, ConversationType: "thread",
+		MessageID: "om-new", RootMessageID: "om-root-a", SenderID: "ou-user", Text: "/new",
+	})
+	if err != nil {
+		t.Fatalf("process new: %v", err)
+	}
+	if !strings.Contains(result.ReplyText, "该话题的下一条消息会创建新的 session") {
+		t.Fatalf("unexpected new reply: %q", result.ReplyText)
+	}
+	if got, _ := service.sessions.TopicSessionID(ref, "om-root-a"); got != "" {
+		t.Fatalf("topic A session = %q, want cleared", got)
+	}
+}
+
+func TestCompressCommandTargetsTopicSessionInThread(t *testing.T) {
+	t.Parallel()
+
+	service, _, fakeBackend, _, _, ref := newTestFlowService(t)
+	enableTopicSessionMode(t, service, ref)
+	service.afterReply = func(context.Context, string, TextInput, string) (afterReplyHookResult, error) {
+		return afterReplyHookResult{}, nil
+	}
+	if err := service.sessions.BindTopic(ref, "om-root-a", "opencode", "sess-a", time.Now().UTC()); err != nil {
+		t.Fatalf("bind topic a: %v", err)
+	}
+	var gotSessionID, gotText string
+	fakeBackend.promptFunc = func(_ context.Context, _ string, sessionID, text string, _ []backend.Attachment, _ backend.PromptOptions) (backend.PromptResult, error) {
+		gotSessionID = sessionID
+		gotText = text
+		return backend.PromptResult{SessionID: "sess-a-compacted", ReplyText: "compacted"}, nil
+	}
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider: ref.Provider, ConversationID: ref.ConversationID, ConversationType: "thread",
+		MessageID: "om-compress", RootMessageID: "om-root-a", SenderID: "ou-user", Text: "/compress",
+	})
+	if err != nil {
+		t.Fatalf("process compress: %v", err)
+	}
+	if gotSessionID != "sess-a" {
+		t.Fatalf("compress prompt session = %q, want sess-a", gotSessionID)
+	}
+	if gotText != "/compact" {
+		t.Fatalf("compress prompt text = %q, want /compact", gotText)
+	}
+	if result.ReplyText != "compacted" {
+		t.Fatalf("compress reply = %q, want compacted", result.ReplyText)
+	}
+	if got, _ := service.sessions.TopicSessionID(ref, "om-root-a"); got != "sess-a-compacted" {
+		t.Fatalf("topic A session = %q, want rebound to sess-a-compacted", got)
+	}
+}
+
+func TestCompressCommandRefusesAtTopLevelInTopicMode(t *testing.T) {
+	t.Parallel()
+
+	service, _, fakeBackend, _, _, ref := newTestFlowService(t)
+	enableTopicSessionMode(t, service, ref)
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider: ref.Provider, ConversationID: ref.ConversationID, ConversationType: "group",
+		MessageID: "om-compress", SenderID: "ou-user", Text: "/compress",
+	})
+	if err != nil {
+		t.Fatalf("process compress: %v", err)
+	}
+	if !strings.Contains(result.ReplyText, "请在具体话题") {
+		t.Fatalf("expected top-level refuse hint: %q", result.ReplyText)
+	}
+	if fakeBackend.promptCalls != 0 {
+		t.Fatalf("compress at top level must not prompt, calls=%d", fakeBackend.promptCalls)
+	}
+}
+
+func TestAbortCommandTargetsTopicSessionInThread(t *testing.T) {
+	t.Parallel()
+
+	service, _, fakeBackend, _, _, ref := newTestFlowService(t)
+	enableTopicSessionMode(t, service, ref)
+	if err := service.sessions.BindTopic(ref, "om-root-a", "opencode", "sess-a", time.Now().UTC()); err != nil {
+		t.Fatalf("bind topic a: %v", err)
+	}
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider: ref.Provider, ConversationID: ref.ConversationID, ConversationType: "thread",
+		MessageID: "om-abort", RootMessageID: "om-root-a", SenderID: "ou-user", Text: "/abort",
+	})
+	if err != nil {
+		t.Fatalf("process abort: %v", err)
+	}
+	if result.ReplyText != "已向当前会话发送中断请求。" {
+		t.Fatalf("unexpected abort reply: %q", result.ReplyText)
+	}
+	if len(fakeBackend.abortedSessionIDs) != 1 || fakeBackend.abortedSessionIDs[0] != "sess-a" {
+		t.Fatalf("aborted sessions = %+v, want [sess-a]", fakeBackend.abortedSessionIDs)
+	}
+}
+
+func TestAbortCommandRefusesAtTopLevelInTopicMode(t *testing.T) {
+	t.Parallel()
+
+	service, _, fakeBackend, _, _, ref := newTestFlowService(t)
+	enableTopicSessionMode(t, service, ref)
+	if err := service.sessions.BindTopic(ref, "om-root-a", "opencode", "sess-a", time.Now().UTC()); err != nil {
+		t.Fatalf("bind topic a: %v", err)
+	}
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider: ref.Provider, ConversationID: ref.ConversationID, ConversationType: "group",
+		MessageID: "om-abort", SenderID: "ou-user", Text: "/abort",
+	})
+	if err != nil {
+		t.Fatalf("process abort: %v", err)
+	}
+	if !strings.Contains(result.ReplyText, "请在具体话题") {
+		t.Fatalf("expected top-level refuse hint: %q", result.ReplyText)
+	}
+	if len(fakeBackend.abortedSessionIDs) != 0 {
+		t.Fatalf("abort at top level must not abort, got %+v", fakeBackend.abortedSessionIDs)
+	}
+}
+
+func TestAttachCommandBindsTopicSessionInThread(t *testing.T) {
+	t.Parallel()
+
+	service, _, fakeBackend, _, _, ref := newTestFlowService(t)
+	enableTopicSessionMode(t, service, ref)
+	current, err := service.sessions.Current(ref)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+	fakeBackend.sessionInfo = backend.SessionInfo{ID: "sess-attach", Directory: current.Workspace.Path}
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider: ref.Provider, ConversationID: ref.ConversationID, ConversationType: "thread",
+		MessageID: "om-attach", RootMessageID: "om-root-a", SenderID: "ou-user", Text: "/attach sess-attach",
+	})
+	if err != nil {
+		t.Fatalf("process attach: %v", err)
+	}
+	if !strings.Contains(result.ReplyText, "已将当前对话 attach 到 session") {
+		t.Fatalf("unexpected attach reply: %q", result.ReplyText)
+	}
+	if got, _ := service.sessions.TopicSessionID(ref, "om-root-a"); got != "sess-attach" {
+		t.Fatalf("topic A session = %q, want sess-attach", got)
+	}
+	current, err = service.sessions.Current(ref)
+	if err != nil {
+		t.Fatalf("current after attach: %v", err)
+	}
+	if current.ActiveSessionID != "" {
+		t.Fatalf("main session = %q, want empty (attach bound topic only)", current.ActiveSessionID)
+	}
+}
+
+func TestAttachCommandRefusesAtTopLevelInTopicMode(t *testing.T) {
+	t.Parallel()
+
+	service, _, _, _, _, ref := newTestFlowService(t)
+	enableTopicSessionMode(t, service, ref)
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider: ref.Provider, ConversationID: ref.ConversationID, ConversationType: "group",
+		MessageID: "om-attach", SenderID: "ou-user", Text: "/attach sess-attach",
+	})
+	if err != nil {
+		t.Fatalf("process attach: %v", err)
+	}
+	if !strings.Contains(result.ReplyText, "请在具体话题") {
+		t.Fatalf("expected top-level refuse hint: %q", result.ReplyText)
+	}
+	if has, _ := service.sessions.HasTopicSessions(ref); has {
+		t.Fatalf("attach at top level must not bind any topic session")
+	}
+}
+
 func TestLegacyP2PConversationTypeFallsBackToDirect(t *testing.T) {
 	t.Parallel()
 
