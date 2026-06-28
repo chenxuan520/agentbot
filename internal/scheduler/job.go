@@ -37,4 +37,5 @@ type Store interface {
 	ListDueJobs(now time.Time, limit int) ([]Job, error)
 	UpdateJobStatus(id, status string, updatedAt time.Time) error
 	RescheduleJob(id string, runAt, updatedAt time.Time) error
+	ReclaimRunningJobs(now time.Time, maxAttempts int) (int, int, error)
 }

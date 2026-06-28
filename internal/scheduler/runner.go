@@ -2,9 +2,17 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
+
+	"github.com/chenxuan520/agentbot/internal/observability"
 )
+
+// DefaultMaxJobAttempts bounds how many times a job may be reclaimed from a
+// crashed (running) state before it is dead-lettered, so a job that reliably
+// crashes the process cannot create a boot -> reclaim -> crash loop.
+const DefaultMaxJobAttempts = 5
 
 type Handler interface {
 	Handle(job Job, triggeredAt time.Time) error
@@ -24,6 +32,31 @@ func (r *Runner) SetLoopErrorNotifier(notifier func(error)) {
 	r.loopErrorNotifier = notifier
 }
 
+// Recover requeues jobs left running by a previous crash. Call once at daemon
+// startup, before Loop, so orphaned jobs are picked up on the next tick. Jobs
+// that exhaust DefaultMaxJobAttempts are dead-lettered and surfaced via the
+// loop-error notifier. It returns (reclaimed, deadLettered).
+func (r *Runner) Recover() (int, int, error) {
+	reclaimed, deadLettered, err := r.service.RecoverStuckJobs(DefaultMaxJobAttempts)
+	if err != nil {
+		observability.RecordError("scheduler", "", "", "recover stuck jobs failed", err)
+		return 0, 0, err
+	}
+	if reclaimed > 0 || deadLettered > 0 {
+		log.Printf("scheduler recover: reclaimed=%d deadLettered=%d", reclaimed, deadLettered)
+		observability.Record(observability.Event{
+			Severity: observability.SeverityWarn,
+			Category: "scheduler",
+			Summary:  "recovered stuck jobs after restart",
+			Detail:   fmt.Sprintf("reclaimed=%d deadLettered=%d", reclaimed, deadLettered),
+		})
+	}
+	if deadLettered > 0 && r.loopErrorNotifier != nil {
+		r.loopErrorNotifier(fmt.Errorf("dead-lettered %d job(s) stuck running past %d attempts", deadLettered, DefaultMaxJobAttempts))
+	}
+	return reclaimed, deadLettered, nil
+}
+
 func (r *Runner) RunDue(now time.Time, limit int) ([]Job, error) {
 	jobs, err := r.service.Due(now, limit)
 	if err != nil {
@@ -40,6 +73,7 @@ func (r *Runner) RunDue(now time.Time, limit int) ([]Job, error) {
 				return triggered, failErr
 			}
 			log.Printf("scheduler job failed: id=%s route=%s ref=%s/%s err=%v", job.ID, job.Route, job.Provider, job.ConversationID, err)
+			observability.RecordError("scheduler", job.Provider, job.ConversationID, "job failed: "+job.Route, err)
 			continue
 		}
 		nextRunAt, recurring, err := NextRunAt(job, now.UTC())
@@ -48,6 +82,7 @@ func (r *Runner) RunDue(now time.Time, limit int) ([]Job, error) {
 				return triggered, failErr
 			}
 			log.Printf("scheduler job reschedule failed: id=%s route=%s ref=%s/%s err=%v", job.ID, job.Route, job.Provider, job.ConversationID, err)
+			observability.RecordError("scheduler", job.Provider, job.ConversationID, "job reschedule failed: "+job.Route, err)
 			continue
 		}
 		if recurring {

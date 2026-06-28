@@ -125,11 +125,25 @@ worker loop 每轮会：
 - 如果服务停机错过了触发时间，重启后下一轮会补跑这些 `run_at <= now` 的 `pending` 任务
 - `.agents/runtime/triggered-jobs.jsonl` 只是触发日志，不是任务真实来源
 
-当前已知边界：
+崩溃恢复（running 回收）：
 
-- 如果进程在任务被标成 `running` 之后、但在 `done/failed` 之前崩掉，该任务会停留在 `running`
-- 现在没有自动把历史 `running` 任务回收成 `pending` 的恢复逻辑
+- 如果进程在任务被标成 `running` 之后、但在 `done/failed` 之前崩掉，该行会停留在 `running`
+- daemon 是单实例（只有一个 `Loop`、一个 sqlite writer），所以启动时看到的任何 `running` 都是上次崩溃的残留
+- `runDaemon` 在启动 `Loop` 之前会调一次 `Runner.Recover()`：把残留 `running` 回收成 `pending`，下一轮自然补跑（见 `Store.ReclaimRunningJobs`）
+- 这把 scheduler 的语义从“崩了就静默丢”变成 **at-least-once**：崩溃可能发生在副作用已执行、终态还没写之间，因此恢复后可能重跑一次（notify / prompt replay 等 handler 需容忍一次重复）
+- 每次回收会 `attempts + 1`；超过 `DefaultMaxJobAttempts`（5）的“毒任务”会被 dead-letter 成 `failed` 并通过 failure notifier 上报，避免 启动→回收→再崩 的死循环
+- `.agents/runtime/triggered-jobs.jsonl` 仍只是触发日志，不是任务真实来源
 - 更详细的 scheduler 说明见 `docs/scheduler.md`
+
+## 可观测性（别再静默失败）
+
+`internal/observability` 是一个进程内的失败记录器（无外部依赖、并发安全）：
+
+- 维护一个有上限的环形 buffer（最近 500 条事件）+ 按 `category/severity` 的单调计数器
+- 关键“容易被吞掉”的失败点都会写一条记录：scheduler 任务失败 / reschedule 失败 / 崩溃回收、display-name 解析失败、Feishu listener 入站处理失败、daemon 级 failure notify（listener/scheduler loop）
+- `notifyFailure` 会**先记录再判断 webhook**，所以即使没配 failure webhook，事件也不会丢
+- 本地 API `GET /api/v1/admin/observability`（project token）返回计数器、最近事件，以及对默认 backend / provider 的一次 best-effort 健康探测
+- web 管理台新增「诊断」页：健康徽标、失败计数、最近事件表，支持自动刷新
 
 ## Hooks
 

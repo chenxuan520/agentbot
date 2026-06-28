@@ -440,6 +440,78 @@ func TestStoreRescheduleJob(t *testing.T) {
 	}
 }
 
+func TestStoreReclaimRunningJobs(t *testing.T) {
+	t.Parallel()
+
+	store, err := Open(filepath.Join(t.TempDir(), "state.sqlite3"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	ref := conversation.Ref{Provider: "feishu", ConversationID: "chat-reclaim"}
+	now := time.Now().UTC().Truncate(time.Second)
+	mkJob := func(id, status string) scheduler.Job {
+		return scheduler.Job{
+			ID:             id,
+			Provider:       ref.Provider,
+			ConversationID: ref.ConversationID,
+			Route:          "reminder.follow_up",
+			Payload:        `{"promptText":"x"}`,
+			RunAt:          now,
+			Status:         status,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}
+	}
+	// A running (crashed) job, plus a pending and a done job that must be left alone.
+	for _, job := range []scheduler.Job{
+		mkJob("job-running", scheduler.StatusRunning),
+		mkJob("job-pending", scheduler.StatusPending),
+		mkJob("job-done", scheduler.StatusDone),
+	} {
+		if err := store.CreateJob(job); err != nil {
+			t.Fatalf("create job %s: %v", job.ID, err)
+		}
+	}
+
+	reclaimed, deadLettered, err := store.ReclaimRunningJobs(now.Add(time.Minute), 3)
+	if err != nil {
+		t.Fatalf("reclaim: %v", err)
+	}
+	if reclaimed != 1 || deadLettered != 0 {
+		t.Fatalf("reclaimed=%d deadLettered=%d, want 1 0", reclaimed, deadLettered)
+	}
+	got, err := store.GetJob("job-running")
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if got.Status != scheduler.StatusPending {
+		t.Fatalf("status = %q, want pending after reclaim", got.Status)
+	}
+
+	// Reclaiming again drives attempts to the cap and dead-letters the job.
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := store.UpdateJobStatus("job-running", scheduler.StatusRunning, now); err != nil {
+			t.Fatalf("mark running: %v", err)
+		}
+		reclaimed, deadLettered, err = store.ReclaimRunningJobs(now.Add(time.Minute), 3)
+		if err != nil {
+			t.Fatalf("reclaim attempt %d: %v", attempt, err)
+		}
+	}
+	if deadLettered != 1 {
+		t.Fatalf("deadLettered=%d, want 1 once attempts hit the cap", deadLettered)
+	}
+	got, err = store.GetJob("job-running")
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if got.Status != scheduler.StatusFailed {
+		t.Fatalf("status = %q, want failed after dead-letter", got.Status)
+	}
+}
+
 func TestStoreListActiveJobs(t *testing.T) {
 	t.Parallel()
 

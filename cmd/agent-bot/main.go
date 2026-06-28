@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/chenxuan520/agentbot/internal/accesstoken"
@@ -19,6 +20,7 @@ import (
 	"github.com/chenxuan520/agentbot/internal/flow"
 	feishugateway "github.com/chenxuan520/agentbot/internal/gateway/feishu"
 	"github.com/chenxuan520/agentbot/internal/localapi"
+	"github.com/chenxuan520/agentbot/internal/observability"
 	"github.com/chenxuan520/agentbot/internal/progress"
 	"github.com/chenxuan520/agentbot/internal/provider"
 	"github.com/chenxuan520/agentbot/internal/remoteagent"
@@ -215,6 +217,11 @@ func runDaemon(cfg config.Config, sessionService *session.Service, flowService *
 	schedulerRunner.SetLoopErrorNotifier(func(err error) {
 		notifyFailure(failureNotifier, "scheduler-loop-error", buildFailureText("scheduler loop error", fmt.Sprintf("err=%v | action=continue", err)))
 	})
+	// Requeue jobs left running by a previous crash before the loop starts, so
+	// orphaned scheduled jobs are not silently lost across restarts.
+	if _, _, err := schedulerRunner.Recover(); err != nil {
+		log.Printf("scheduler recover failed: %v", err)
+	}
 
 	switch cfg.DefaultProvider {
 	case "feishu":
@@ -605,6 +612,17 @@ func runFeishuListenerLoopWithRetry(ctx context.Context, cfg config.Config, list
 	}
 }
 
+func failureCategory(key string) string {
+	switch {
+	case strings.Contains(key, "scheduler"):
+		return "scheduler"
+	case strings.Contains(key, "listener"), strings.Contains(key, "feishu"):
+		return "listener"
+	default:
+		return "daemon"
+	}
+}
+
 func buildFailureText(kind, detail string) string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
@@ -614,6 +632,14 @@ func buildFailureText(kind, detail string) string {
 }
 
 func notifyFailure(notifier *failurenotify.FeishuWebhook, key, text string) {
+	// Record first, unconditionally: the admin observability panel must capture
+	// the failure even when no failure webhook is configured (no silent drops).
+	observability.Record(observability.Event{
+		Severity: observability.SeverityError,
+		Category: failureCategory(key),
+		Summary:  key,
+		Detail:   text,
+	})
 	if notifier == nil || !notifier.Enabled() {
 		return
 	}

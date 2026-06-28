@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/chenxuan520/agentbot/internal/accesstoken"
 	"github.com/chenxuan520/agentbot/internal/conversation"
+	"github.com/chenxuan520/agentbot/internal/observability"
 	providerapi "github.com/chenxuan520/agentbot/internal/providerapi"
 	"github.com/chenxuan520/agentbot/internal/session"
 	"github.com/chenxuan520/agentbot/internal/workspace"
@@ -207,7 +209,11 @@ func (s *Server) handleAdminSessionDetail(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
-	displayInfo, _ := s.resolveSessionDisplayInfo(c.Request.Context(), ref)
+	displayInfo, err := s.resolveSessionDisplayInfo(c.Request.Context(), ref)
+	if err != nil {
+		log.Printf("admin: resolve display name failed: provider=%s conversation=%s err=%v", ref.Provider, ref.ConversationID, err)
+		observability.RecordError("display-name", ref.Provider, ref.ConversationID, "resolve display name failed", err)
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"provider":           ref.Provider,
 		"conversationId":     ref.ConversationID,
@@ -1016,7 +1022,11 @@ func (s *Server) resolveDisplayNamesBatch(ctx context.Context, refs []conversati
 			defer func() { <-sema }()
 			lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()
-			displayInfo, _ := s.resolveSessionDisplayInfo(lookupCtx, ref)
+			displayInfo, err := s.resolveSessionDisplayInfo(lookupCtx, ref)
+			if err != nil {
+				log.Printf("admin: resolve display name failed: provider=%s conversation=%s err=%v", ref.Provider, ref.ConversationID, err)
+				observability.RecordError("display-name", ref.Provider, ref.ConversationID, "resolve display name failed", err)
+			}
 			results[index] = adminSessionSummary{
 				Summary: session.Summary{
 					Provider:       ref.Provider,

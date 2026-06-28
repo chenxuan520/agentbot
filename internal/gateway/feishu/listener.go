@@ -18,6 +18,7 @@ import (
 	"github.com/chenxuan520/agentbot/internal/config"
 	"github.com/chenxuan520/agentbot/internal/conversation"
 	"github.com/chenxuan520/agentbot/internal/flow"
+	"github.com/chenxuan520/agentbot/internal/observability"
 	"github.com/chenxuan520/agentbot/internal/progress"
 	providerfeishu "github.com/chenxuan520/agentbot/internal/provider/feishu"
 	providerapi "github.com/chenxuan520/agentbot/internal/providerapi"
@@ -158,6 +159,7 @@ func (l *Listener) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 			defer cleanup()
 		}
 		if err != nil {
+			observability.RecordError("listener", "feishu", message.ChatID, "prepare image attachments failed", err)
 			l.replyProcessingFailure(context.Background(), message)
 			return
 		}
@@ -176,6 +178,7 @@ func (l *Listener) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 			Attachments:      attachments,
 			AddReaction:      true,
 		}); err != nil {
+			observability.RecordError("backend", "feishu", message.ChatID, "process message failed", err)
 			l.replyProcessingFailure(context.Background(), message)
 		}
 	}(*incoming)

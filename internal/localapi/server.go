@@ -123,6 +123,7 @@ func (s *Server) router() *gin.Engine {
 	admin := router.Group("/api/v1/admin")
 	admin.Use(s.requireAdminToken)
 	admin.GET("/me", s.handleAdminMe)
+	admin.GET("/observability", s.handleAdminObservability)
 	admin.GET("/sessions", s.handleAdminSessionList)
 	admin.POST("/sessions/display-names", s.handleAdminSessionDisplayNames)
 	admin.GET("/sessions/:provider/:conversationId", s.handleAdminSessionDetail)

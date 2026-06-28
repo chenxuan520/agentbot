@@ -132,6 +132,12 @@ func (s *Store) init() error {
 	if err != nil {
 		return err
 	}
+	// attempts tracks how many times a job has been reclaimed from a crashed
+	// (running) state, so a poison job can be dead-lettered instead of looping.
+	_, err = s.db.Exec(`ALTER TABLE scheduled_jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`)
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		return err
+	}
 
 	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS control_rules (
@@ -788,6 +794,63 @@ func (s *Store) RescheduleJob(id string, runAt, updatedAt time.Time) error {
 		WHERE id = ?
 	`, toUnix(runAt), scheduler.StatusPending, toUnix(updatedAt), id)
 	return err
+}
+
+// ReclaimRunningJobs requeues jobs left in the running state by a previous crash.
+// The daemon is single-instance, so any running row observed at startup is a
+// leftover from a process that died mid-handler. Each reclaim bumps attempts;
+// jobs that have exhausted maxAttempts are dead-lettered to failed instead of
+// being retried forever (poison-job guard). It returns (reclaimed, deadLettered).
+func (s *Store) ReclaimRunningJobs(now time.Time, maxAttempts int) (int, int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+
+	updatedAt := toUnix(now)
+	if _, err := tx.Exec(`
+		UPDATE scheduled_jobs
+		SET attempts = attempts + 1, updated_at = ?
+		WHERE status = ?
+	`, updatedAt, scheduler.StatusRunning); err != nil {
+		return 0, 0, err
+	}
+
+	deadLettered := 0
+	if maxAttempts > 0 {
+		res, err := tx.Exec(`
+			UPDATE scheduled_jobs
+			SET status = ?, updated_at = ?
+			WHERE status = ? AND attempts >= ?
+		`, scheduler.StatusFailed, updatedAt, scheduler.StatusRunning, maxAttempts)
+		if err != nil {
+			return 0, 0, err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return 0, 0, err
+		}
+		deadLettered = int(affected)
+	}
+
+	res, err := tx.Exec(`
+		UPDATE scheduled_jobs
+		SET status = ?, updated_at = ?
+		WHERE status = ?
+	`, scheduler.StatusPending, updatedAt, scheduler.StatusRunning)
+	if err != nil {
+		return 0, 0, err
+	}
+	reclaimed, err := res.RowsAffected()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return int(reclaimed), deadLettered, nil
 }
 
 func (s *Store) CreateRule(rule control.Rule) error {

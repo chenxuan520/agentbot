@@ -48,6 +48,12 @@ func (s *Service) Due(now time.Time, limit int) ([]Job, error) {
 	return s.store.ListDueJobs(now.UTC(), limit)
 }
 
+// RecoverStuckJobs requeues jobs left running by a previous crash, dead-lettering
+// any that have exhausted maxAttempts. It returns (reclaimed, deadLettered).
+func (s *Service) RecoverStuckJobs(maxAttempts int) (int, int, error) {
+	return s.store.ReclaimRunningJobs(time.Now().UTC(), maxAttempts)
+}
+
 func (s *Service) Complete(id string) error {
 	return s.store.UpdateJobStatus(id, StatusDone, time.Now().UTC())
 }

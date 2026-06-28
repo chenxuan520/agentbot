@@ -46,7 +46,9 @@
 - 支持会话级 scheduler：一次性任务、cron、prompt replay、notify replay
 - 支持其他 bot 消息补投
 - 支持 remote-agent：本地 agent 插件通过 WebSocket 接管某个会话
-- 支持 web 管理台：Sessions / Roles / Skills / Repos / Scripts / Subagents
+- 支持 scheduler 崩溃恢复：重启时把崩溃残留的 `running` 任务回收续跑（at-least-once，带 attempts 上限）
+- 支持可观测性：进程内失败记录器 + `GET /api/v1/admin/observability` + web「诊断」页，避免静默失败
+- 支持 web 管理台：Sessions / Roles / Skills / Repos / Scripts / Subagents / 诊断
 
 ## 仓库结构
 
@@ -390,6 +392,7 @@ data/chats/<provider>/<conversation-id>/
 - Repos：管理共享 repo 挂载源
 - Scripts：查看和维护系统级脚本
 - Subagents：查看和维护 subagent 定义
+- 诊断：查看 backend / provider 健康、失败计数和最近错误事件
 
 session token 登录后：
 

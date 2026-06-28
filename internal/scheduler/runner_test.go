@@ -122,14 +122,64 @@ func TestRunnerLoopContinuesAfterRunDueError(t *testing.T) {
 	}
 }
 
+func TestRunnerRecoverDeadLettersAndNotifies(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeSchedulerStore{reclaimResult: [2]int{2, 1}}
+	runner := NewRunner(NewService(store), fakeSchedulerHandler(func(Job, time.Time) error { return nil }))
+	var notified []error
+	runner.SetLoopErrorNotifier(func(err error) { notified = append(notified, err) })
+
+	reclaimed, deadLettered, err := runner.Recover()
+	if err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if reclaimed != 2 || deadLettered != 1 {
+		t.Fatalf("reclaimed=%d deadLettered=%d, want 2 1", reclaimed, deadLettered)
+	}
+	if store.reclaimCalls != 1 {
+		t.Fatalf("reclaimCalls=%d, want 1", store.reclaimCalls)
+	}
+	if store.reclaimMax != DefaultMaxJobAttempts {
+		t.Fatalf("reclaimMax=%d, want %d", store.reclaimMax, DefaultMaxJobAttempts)
+	}
+	if len(notified) != 1 {
+		t.Fatalf("notified=%d, want 1 (dead-letter surfaced)", len(notified))
+	}
+}
+
+func TestRunnerRecoverQuietWhenNothingStuck(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeSchedulerStore{reclaimResult: [2]int{0, 0}}
+	runner := NewRunner(NewService(store), fakeSchedulerHandler(func(Job, time.Time) error { return nil }))
+	var notified []error
+	runner.SetLoopErrorNotifier(func(err error) { notified = append(notified, err) })
+
+	reclaimed, deadLettered, err := runner.Recover()
+	if err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if reclaimed != 0 || deadLettered != 0 {
+		t.Fatalf("reclaimed=%d deadLettered=%d, want 0 0", reclaimed, deadLettered)
+	}
+	if len(notified) != 0 {
+		t.Fatalf("notified=%d, want 0 when nothing was stuck", len(notified))
+	}
+}
+
 type fakeSchedulerStore struct {
-	dueJobs      []Job
-	statuses     []string
-	completed    []string
-	failed       []string
-	rescheduled  []fakeReschedule
-	listDueFunc  func(now time.Time, limit int) ([]Job, error)
-	listDueCalls int
+	dueJobs       []Job
+	statuses      []string
+	completed     []string
+	failed        []string
+	rescheduled   []fakeReschedule
+	listDueFunc   func(now time.Time, limit int) ([]Job, error)
+	listDueCalls  int
+	reclaimResult [2]int
+	reclaimErr    error
+	reclaimCalls  int
+	reclaimMax    int
 }
 
 type fakeReschedule struct {
@@ -170,6 +220,15 @@ func (f *fakeSchedulerStore) UpdateJobStatus(id, status string, updatedAt time.T
 func (f *fakeSchedulerStore) RescheduleJob(id string, runAt, updatedAt time.Time) error {
 	f.rescheduled = append(f.rescheduled, fakeReschedule{id: id, runAt: runAt})
 	return nil
+}
+
+func (f *fakeSchedulerStore) ReclaimRunningJobs(now time.Time, maxAttempts int) (int, int, error) {
+	f.reclaimCalls++
+	f.reclaimMax = maxAttempts
+	if f.reclaimErr != nil {
+		return 0, 0, f.reclaimErr
+	}
+	return f.reclaimResult[0], f.reclaimResult[1], nil
 }
 
 type fakeSchedulerHandler func(job Job, triggeredAt time.Time) error
