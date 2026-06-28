@@ -1,5 +1,6 @@
 import type {
   MeResponse,
+  ObservabilitySnapshot,
   RoleDetail,
   RoleSummary,
   ScheduleCreateInput,
@@ -30,6 +31,10 @@ export class ApiClient {
 
   async getMe(): Promise<MeResponse> {
     return this.request('/api/v1/admin/me')
+  }
+
+  async getObservability(): Promise<ObservabilitySnapshot> {
+    return this.request('/api/v1/admin/observability')
   }
 
   async listSessions(): Promise<SessionSummary[]> {

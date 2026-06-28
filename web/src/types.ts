@@ -196,6 +196,33 @@ export interface ScheduleJob {
   NotifyTextResolved?: string
 }
 
+export interface ObservabilityEvent {
+  time: string
+  severity: string
+  category: string
+  provider?: string
+  conversationId?: string
+  summary: string
+  detail?: string
+}
+
+export interface ObservabilityHealthItem {
+  name: string
+  ok: boolean
+  error?: string
+}
+
+export interface ObservabilitySnapshot {
+  startedAt: string
+  now: string
+  counters: Record<string, number>
+  events: ObservabilityEvent[]
+  health: {
+    backend: ObservabilityHealthItem
+    provider: ObservabilityHealthItem
+  }
+}
+
 export type ScheduleContentKind = 'prompt' | 'notify'
 
 export interface ScheduleCreateInput {

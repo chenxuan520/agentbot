@@ -737,7 +737,10 @@ p {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.9rem;
-  align-items: center;
+  /* The left column stacks a label above the input, so center alignment would
+     float the buttons up against the label. Align to the end (the input row)
+     so the copy / rotate buttons line up with the token input box. */
+  align-items: end;
   border-radius: 16px;
   border: 1px solid rgba(123, 145, 208, 0.16);
   background: linear-gradient(180deg, rgba(12, 22, 42, 0.88), rgba(9, 17, 33, 0.84));
@@ -758,7 +761,9 @@ p {
 }
 
 .token-inline-input {
-  padding: 0.65rem 0.8rem;
+  /* match the button vertical padding (0.7rem) so the input and the copy /
+     rotate buttons render at the same height and align cleanly. */
+  padding: 0.7rem 0.8rem;
 }
 
 .token-strip-actions {
@@ -1465,26 +1470,6 @@ p {
   height: clamp(600px, 72vh, 1080px);
 }
 
-.role-create-strip,
-.role-action-strip,
-.role-editor-grid {
-  display: grid;
-  gap: 0.9rem;
-}
-
-.role-create-strip {
-  grid-template-columns: minmax(0, 1fr) 220px auto;
-}
-
-.role-action-strip {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-}
-
-.role-editor-grid {
-  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
-}
-
 .role-editor-card {
   border-radius: 20px;
   border: 1px solid rgba(123, 145, 208, 0.18);
@@ -1657,6 +1642,7 @@ p {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 auto;
   min-width: 34px;
   height: 20px;
   border-radius: 999px;
@@ -1676,6 +1662,10 @@ p {
 
 .tree-label {
   font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .tree-file-main {
@@ -1690,6 +1680,8 @@ p {
 .tree-meta {
   color: #8fa2cc;
   font-size: 0.82rem;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .monaco-panel {
@@ -2190,12 +2182,6 @@ html {
     grid-template-columns: 1fr;
   }
 
-  .role-create-strip,
-  .role-action-strip,
-  .role-editor-grid {
-    grid-template-columns: 1fr;
-  }
-
   .monaco-panel {
     min-height: 360px;
     height: clamp(360px, 56vh, 720px);
@@ -2484,4 +2470,150 @@ html {
   50% {
     box-shadow: 0 0 0 6px rgba(42, 216, 180, 0.05);
   }
+}
+
+/* Observability panel */
+.obs-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.obs-health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.obs-health-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(123, 145, 208, 0.18);
+  background: linear-gradient(180deg, rgba(13, 23, 45, 0.9), rgba(10, 18, 36, 0.88));
+}
+
+.obs-health-card.ok {
+  border-color: rgba(42, 216, 180, 0.3);
+}
+
+.obs-health-card.down {
+  border-color: rgba(255, 107, 107, 0.34);
+}
+
+.obs-health-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.obs-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #6b7aa1;
+}
+
+.obs-dot.ok {
+  background: #2ad8b4;
+  box-shadow: 0 0 0 4px rgba(42, 216, 180, 0.16);
+}
+
+.obs-dot.down {
+  background: #ff6b6b;
+  box-shadow: 0 0 0 4px rgba(255, 107, 107, 0.16);
+}
+
+.obs-auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.obs-counter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.obs-counter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(123, 145, 208, 0.16);
+  background: rgba(10, 18, 36, 0.58);
+}
+
+.obs-counter-value {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.obs-events {
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+.obs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.obs-table thead th {
+  text-align: left;
+  padding: 8px 10px;
+  color: var(--text-soft);
+  font-weight: 600;
+  border-bottom: 1px solid rgba(123, 145, 208, 0.2);
+  white-space: nowrap;
+}
+
+.obs-table tbody td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(123, 145, 208, 0.1);
+  vertical-align: top;
+}
+
+.obs-table .nowrap {
+  white-space: nowrap;
+}
+
+.obs-detail {
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+.obs-sev {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.obs-sev.error {
+  background: rgba(255, 107, 107, 0.16);
+  color: #ff9b9b;
+  border: 1px solid rgba(255, 107, 107, 0.3);
+}
+
+.obs-sev.warn {
+  background: rgba(244, 183, 64, 0.14);
+  color: #f6c869;
+  border: 1px solid rgba(244, 183, 64, 0.28);
+}
+
+.obs-sev.info {
+  background: rgba(83, 107, 255, 0.14);
+  color: #9db0ff;
+  border: 1px solid rgba(123, 145, 208, 0.3);
 }

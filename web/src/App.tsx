@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { ApiClient } from './api'
 import { LoginScreen } from './components/LoginScreen'
+import { ObservabilityPage } from './components/ObservabilityPage'
 import { RepoLibraryPage } from './components/RepoLibraryPage'
 import { RolesLibraryPage } from './components/RolesLibraryPage'
 import { ScriptsPage } from './components/ScriptsPage'
@@ -15,7 +16,7 @@ import type { MeResponse } from './types'
 const storageKey = 'agent-bot-admin-token'
 const pageQueryParam = 'page'
 
-type PageKey = 'sessions' | 'roles' | 'skills' | 'repos' | 'scripts' | 'subagents'
+type PageKey = 'sessions' | 'roles' | 'skills' | 'repos' | 'scripts' | 'subagents' | 'observability'
 type SessionPortalPageKey = 'session' | 'skills' | 'subagents'
 const defaultProjectPage: PageKey = 'sessions'
 const defaultSessionPortalPage: SessionPortalPageKey = 'session'
@@ -27,6 +28,7 @@ const projectNavItems: ReadonlyArray<{ key: PageKey; label: string }> = [
   { key: 'repos', label: 'Repos' },
   { key: 'scripts', label: 'Scripts' },
   { key: 'subagents', label: 'Subagents' },
+  { key: 'observability', label: '诊断' },
 ]
 
 const sessionPortalNavItems: ReadonlyArray<{ key: SessionPortalPageKey; label: string }> = [
@@ -324,6 +326,7 @@ export default function App() {
         {page === 'repos' ? <RepoLibraryPage api={api} /> : null}
         {page === 'scripts' ? <ScriptsPage api={api} /> : null}
         {page === 'subagents' ? <SubagentsLibraryPage api={api} canManage /> : null}
+        {page === 'observability' ? <ObservabilityPage api={api} /> : null}
       </main>
     </div>
   )
