@@ -25,10 +25,10 @@ const projectNavItems: ReadonlyArray<{ key: PageKey; label: string }> = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'roles', label: 'Roles' },
   { key: 'skills', label: 'Skills' },
-  { key: 'repos', label: 'Repos' },
   { key: 'scripts', label: 'Scripts' },
   { key: 'subagents', label: 'Subagents' },
-  { key: 'observability', label: '诊断' },
+  { key: 'repos', label: 'Repos' },
+  { key: 'observability', label: 'Diagnostics' },
 ]
 
 const sessionPortalNavItems: ReadonlyArray<{ key: SessionPortalPageKey; label: string }> = [

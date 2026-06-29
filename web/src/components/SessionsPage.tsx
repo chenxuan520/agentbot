@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { ApiClient } from '../api'
-import { chatModeLabel } from '../session-display'
+import { chatModeLabel, isSuspectedLeftGroup } from '../session-display'
 import type { SessionRef, SessionSummary } from '../types'
 import { SessionDetail } from './SessionDetail'
 
@@ -153,6 +153,7 @@ export function SessionsPage({ api }: SessionsPageProps) {
             const resolvedInfo = displayInfo[`${item.provider}:${item.conversationId}`]
             const displayName = resolvedInfo?.displayName?.trim() || item.displayName || item.conversationId
             const chatMode = resolvedInfo?.chatMode ?? item.chatMode ?? ''
+            const suspectedLeft = isSuspectedLeftGroup(resolvedInfo)
             const providerSummary = [item.provider, item.template, chatModeLabel(chatMode)].filter(Boolean).join(' · ')
             return (
               <button
@@ -162,7 +163,12 @@ export function SessionsPage({ api }: SessionsPageProps) {
                 onClick={() => setSelectedRef({ provider: item.provider, conversationId: item.conversationId })}
               >
                 <div className="session-list-head">
-                  <div className="session-list-title" title={displayName}>{displayName}</div>
+                  <div
+                    className={suspectedLeft ? 'session-list-title session-list-title-left' : 'session-list-title'}
+                    title={suspectedLeft ? `${displayName}（已退群）` : displayName}
+                  >
+                    {displayName}
+                  </div>
                   <span className="meta-chip slim">{item.replyMode || '-'}</span>
                 </div>
                 <div className="session-list-meta">{providerSummary}</div>

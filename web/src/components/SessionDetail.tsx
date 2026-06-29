@@ -2,7 +2,7 @@ import Editor from '@monaco-editor/react'
 import { ChangeEvent, useEffect, useRef, useState } from 'react'
 
 import { ApiClient } from '../api'
-import { chatModeLabel } from '../session-display'
+import { chatModeLabel, isSuspectedLeftGroup } from '../session-display'
 import { showErrorToast, showSuccessToast } from '../toast'
 import type {
   RemoteAgentRoute,
@@ -764,7 +764,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
         }
         parsedOpencodeConfig = parsed
       } catch (error) {
-        setMessage(error instanceof Error ? `高级 OpenCode 配置无法解析: ${error.message}` : '高级 OpenCode 配置无法解析')
+        showErrorToast(error instanceof Error ? `高级 OpenCode 配置无法解析: ${error.message}` : '高级 OpenCode 配置无法解析')
         return
       }
     }
@@ -790,7 +790,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       await onSessionChanged?.()
       showSuccessToast('Settings 已保存并重建')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '保存 settings 失败')
+      showErrorToast(error instanceof Error ? error.message : '保存 settings 失败')
     } finally {
       setSavingSettings(false)
     }
@@ -812,7 +812,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       await onSessionChanged?.()
       showSuccessToast('Skills 挂载已保存并重建')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '保存 skills 失败')
+      showErrorToast(error instanceof Error ? error.message : '保存 skills 失败')
     } finally {
       setSavingSkills(false)
     }
@@ -834,7 +834,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       await onSessionChanged?.()
       showSuccessToast('Subagents 挂载已保存并重建')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '保存 subagents 失败')
+      showErrorToast(error instanceof Error ? error.message : '保存 subagents 失败')
     } finally {
       setSavingSubagents(false)
     }
@@ -856,7 +856,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       await onSessionChanged?.()
       showSuccessToast('Repos 挂载已保存并重建')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '保存 repos 失败')
+      showErrorToast(error instanceof Error ? error.message : '保存 repos 失败')
     } finally {
       setSavingRepos(false)
     }
@@ -880,7 +880,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       await onSessionChanged?.()
       showSuccessToast(nextMode === 'custom' ? 'Custom AGENTS 已保存；当前 active session 已清空' : '已恢复跟随 template；当前 active session 已清空')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '保存 AGENTS 失败')
+      showErrorToast(error instanceof Error ? error.message : '保存 AGENTS 失败')
     } finally {
       setSavingAgents(false)
     }
@@ -894,7 +894,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       setDetail((current) => (current ? { ...current, sessionToken } : current))
       showSuccessToast('Session token 已轮换')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '轮换 token 失败')
+      showErrorToast(error instanceof Error ? error.message : '轮换 token 失败')
     } finally {
       setRotatingToken(false)
     }
@@ -915,7 +915,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       URL.revokeObjectURL(url)
       showSuccessToast('已导出当前 session 的 memory、hooks 和私有 skills')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '导出 session 数据失败')
+      showErrorToast(error instanceof Error ? error.message : '导出 session 数据失败')
     } finally {
       setExportingSessionData(false)
     }
@@ -934,7 +934,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       setAgentsFile(null)
       showSuccessToast('已导入当前 session 的 memory、hooks 和私有 skills')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '导入 session 数据失败')
+      showErrorToast(error instanceof Error ? error.message : '导入 session 数据失败')
     } finally {
       setImportingSessionData(false)
     }
@@ -951,7 +951,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       await onSessionDeleted?.()
       showSuccessToast(`已删除 session: ${sessionRef.conversationId}`)
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '删除 session 失败')
+      showErrorToast(error instanceof Error ? error.message : '删除 session 失败')
     } finally {
       setDeletingSession(false)
     }
@@ -966,7 +966,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       await loadSchedule()
       showSuccessToast(`已创建定时任务: ${job.ID}`)
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '创建定时任务失败')
+      showErrorToast(error instanceof Error ? error.message : '创建定时任务失败')
     } finally {
       setSavingSchedule(false)
     }
@@ -980,7 +980,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       await loadSchedule()
       showSuccessToast(`已删除定时任务: ${job.ID}`)
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '删除定时任务失败')
+      showErrorToast(error instanceof Error ? error.message : '删除定时任务失败')
     } finally {
       setCancelingScheduleJobID('')
     }
@@ -1023,7 +1023,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       await loadSchedule()
       showSuccessToast(kind === 'prompt' ? `已更新定时任务提示词: ${job.ID}` : `已更新定时任务提醒文本: ${job.ID}`)
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '更新定时任务内容失败')
+      showErrorToast(error instanceof Error ? error.message : '更新定时任务内容失败')
     } finally {
       setSavingScheduleContentJobID('')
     }
@@ -1143,6 +1143,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
   const currentDetail = detail && detail.provider === sessionRef.provider && detail.conversationId === sessionRef.conversationId ? detail : null
   const headerDisplayName = currentDetail?.displayName || summary?.displayName || sessionRef.conversationId
   const headerChatMode = currentDetail?.chatMode || summary?.chatMode || ''
+  const suspectedLeftGroup = isSuspectedLeftGroup(currentDetail ? { displayName: currentDetail.displayName, chatMode: currentDetail.chatMode } : undefined)
   const headerBackend = currentDetail?.backend || summary?.agentBackend || ''
   const headerTemplate = currentDetail?.settings.template || summary?.template || ''
   const visibleTranscriptMessages = transcriptVisibleMessages(transcript.messages)
@@ -1174,6 +1175,11 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
           <div className="detail-meta">
             <span className="meta-chip detail-meta-tag">{sessionRef.provider}</span>
             {chatModeLabel(headerChatMode) ? <span className="meta-chip detail-meta-tag">{chatModeLabel(headerChatMode)}</span> : null}
+            {suspectedLeftGroup ? (
+              <span className="session-left-tag" title="飞书能读到群名但拿不到会话类型，通常说明 bot 已被移出该群">
+                已退群
+              </span>
+            ) : null}
             {headerBackend ? <span className="meta-chip detail-meta-tag">{headerBackend}</span> : null}
             {headerTemplate ? <span className="meta-chip detail-meta-tag">template: {headerTemplate}</span> : null}
           </div>

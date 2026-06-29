@@ -552,6 +552,22 @@ p {
   font-size: 0.76rem;
 }
 
+.session-left-tag {
+  display: inline-block;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  line-height: 1.3;
+  color: #aab3c2;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  white-space: nowrap;
+}
+
+.session-list-title.session-list-title-left {
+  color: #7f8aa0;
+}
+
 .detail-meta-tag {
   border-radius: 10px;
   padding: 0.18rem 0.5rem;
@@ -2531,6 +2547,7 @@ html {
   align-items: center;
   gap: 6px;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .obs-counter-grid {
