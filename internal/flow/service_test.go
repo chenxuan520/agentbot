@@ -915,12 +915,43 @@ func TestBuildInfoTextIncludesClickableCurrentSessionTitle(t *testing.T) {
 		},
 		AgentBackend: "opencode",
 	}
-	text := buildInfoText(conversation.Ref{Provider: "feishu", ConversationID: "oc_demo"}, current, "abt_sess_demo", "", "", "https://agent-bot.example.com", false, "disabled")
+	text := buildInfoText(conversation.Ref{Provider: "feishu", ConversationID: "oc_demo"}, current, "abt_sess_demo", "", "", "https://agent-bot.example.com", false, "disabled", "")
 	if !strings.Contains(text, "[**当前会话**](https://agent-bot.example.com/?token=abt_sess_demo)") {
 		t.Fatalf("info text missing clickable title: %q", text)
 	}
 	if !strings.Contains(text, "console_url: https://agent-bot.example.com/?token=abt_sess_demo") {
 		t.Fatalf("info text missing console url line: %q", text)
+	}
+}
+
+func TestInfoCommandShowsContextTokens(t *testing.T) {
+	t.Parallel()
+
+	service, _, fakeBackend, _, _, ref := newTestFlowService(t)
+	if _, err := service.sessions.Prepare(ref, time.Now().UTC()); err != nil {
+		t.Fatalf("prepare session: %v", err)
+	}
+	if err := service.sessions.Bind(ref, "opencode", "session-main", time.Now().UTC()); err != nil {
+		t.Fatalf("bind session: %v", err)
+	}
+	fakeBackend.sessionMessages = []backend.SessionMessage{
+		{ID: "m-user", Role: "user"},
+		{ID: "m-assistant", Role: "assistant", Tokens: backend.TokenUsage{Total: 14983, Input: 14952, Output: 7}},
+	}
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider:         ref.Provider,
+		ConversationID:   ref.ConversationID,
+		ConversationType: "group",
+		MessageID:        "om-info-ctx",
+		SenderID:         "ou-user",
+		Text:             "/info",
+	})
+	if err != nil {
+		t.Fatalf("process info: %v", err)
+	}
+	if !strings.Contains(result.ReplyText, "context_tokens: 14983 (input 14952)") {
+		t.Fatalf("missing context tokens in reply: %q", result.ReplyText)
 	}
 }
 
@@ -1500,11 +1531,10 @@ func TestCompressCommandTargetsTopicSessionInThread(t *testing.T) {
 	if err := service.sessions.BindTopic(ref, "om-root-a", "opencode", "sess-a", time.Now().UTC()); err != nil {
 		t.Fatalf("bind topic a: %v", err)
 	}
-	var gotSessionID, gotText string
-	fakeBackend.promptFunc = func(_ context.Context, _ string, sessionID, text string, _ []backend.Attachment, _ backend.PromptOptions) (backend.PromptResult, error) {
+	var gotSessionID string
+	fakeBackend.compactFunc = func(_ context.Context, _ string, sessionID string) error {
 		gotSessionID = sessionID
-		gotText = text
-		return backend.PromptResult{SessionID: "sess-a-compacted", ReplyText: "compacted"}, nil
+		return nil
 	}
 
 	result, err := service.ProcessText(context.Background(), TextInput{
@@ -1515,16 +1545,17 @@ func TestCompressCommandTargetsTopicSessionInThread(t *testing.T) {
 		t.Fatalf("process compress: %v", err)
 	}
 	if gotSessionID != "sess-a" {
-		t.Fatalf("compress prompt session = %q, want sess-a", gotSessionID)
+		t.Fatalf("compress compacted session = %q, want sess-a", gotSessionID)
 	}
-	if gotText != "/compact" {
-		t.Fatalf("compress prompt text = %q, want /compact", gotText)
+	if fakeBackend.promptCalls != 0 {
+		t.Fatalf("compress should not prompt the agent, got %d prompt calls", fakeBackend.promptCalls)
 	}
-	if result.ReplyText != "compacted" {
-		t.Fatalf("compress reply = %q, want compacted", result.ReplyText)
+	if !strings.Contains(result.ReplyText, "已压缩") {
+		t.Fatalf("compress reply = %q, want a compaction confirmation", result.ReplyText)
 	}
-	if got, _ := service.sessions.TopicSessionID(ref, "om-root-a"); got != "sess-a-compacted" {
-		t.Fatalf("topic A session = %q, want rebound to sess-a-compacted", got)
+	// Compaction is in place: the topic session id must stay bound to sess-a.
+	if got, _ := service.sessions.TopicSessionID(ref, "om-root-a"); got != "sess-a" {
+		t.Fatalf("topic A session = %q, want unchanged sess-a", got)
 	}
 }
 
@@ -1546,6 +1577,47 @@ func TestCompressCommandRefusesAtTopLevelInTopicMode(t *testing.T) {
 	}
 	if fakeBackend.promptCalls != 0 {
 		t.Fatalf("compress at top level must not prompt, calls=%d", fakeBackend.promptCalls)
+	}
+}
+
+func TestCompressCommandCompactsActiveSessionInDefaultMode(t *testing.T) {
+	t.Parallel()
+
+	service, _, fakeBackend, _, _, ref := newTestFlowService(t)
+	if _, err := service.sessions.Prepare(ref, time.Now().UTC()); err != nil {
+		t.Fatalf("prepare session: %v", err)
+	}
+	if err := service.sessions.Bind(ref, "opencode", "session-main", time.Now().UTC()); err != nil {
+		t.Fatalf("bind session: %v", err)
+	}
+
+	result, err := service.ProcessText(context.Background(), TextInput{
+		Provider:         ref.Provider,
+		ConversationID:   ref.ConversationID,
+		ConversationType: "group",
+		MessageID:        "om-compress",
+		SenderID:         "ou-user",
+		Text:             "/compress",
+	})
+	if err != nil {
+		t.Fatalf("process compress: %v", err)
+	}
+	if len(fakeBackend.compactedSessionIDs) != 1 || fakeBackend.compactedSessionIDs[0] != "session-main" {
+		t.Fatalf("compacted sessions = %+v, want [session-main]", fakeBackend.compactedSessionIDs)
+	}
+	if fakeBackend.promptCalls != 0 {
+		t.Fatalf("compress should not prompt the agent, got %d prompt calls", fakeBackend.promptCalls)
+	}
+	if !strings.Contains(result.ReplyText, "已压缩") {
+		t.Fatalf("compress reply = %q, want a compaction confirmation", result.ReplyText)
+	}
+	// In-place compaction keeps the same session id, so the binding must stay.
+	current, err := service.sessions.Current(ref)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+	if current.ActiveSessionID != "session-main" {
+		t.Fatalf("active session = %q, want unchanged session-main", current.ActiveSessionID)
 	}
 }
 
@@ -2069,18 +2141,20 @@ type fakeProviderClient struct {
 }
 
 type fakeBackendClient struct {
-	createdSessionID  string
-	createCalls       int
-	createSessionFunc func() (string, error)
-	abortedSessionIDs []string
-	promptCalls       int
-	lastPromptText    string
-	promptRequests    []fakePromptRequest
-	sessionInfo       backend.SessionInfo
-	sessionMessages   []backend.SessionMessage
-	getSessionErr     error
-	getSessionMsgsErr error
-	promptFunc        func(ctx context.Context, workspacePath, sessionID, text string, attachments []backend.Attachment, options backend.PromptOptions) (backend.PromptResult, error)
+	createdSessionID    string
+	createCalls         int
+	createSessionFunc   func() (string, error)
+	abortedSessionIDs   []string
+	promptCalls         int
+	lastPromptText      string
+	promptRequests      []fakePromptRequest
+	sessionInfo         backend.SessionInfo
+	sessionMessages     []backend.SessionMessage
+	getSessionErr       error
+	getSessionMsgsErr   error
+	compactedSessionIDs []string
+	compactFunc         func(ctx context.Context, workspacePath, sessionID string) error
+	promptFunc          func(ctx context.Context, workspacePath, sessionID, text string, attachments []backend.Attachment, options backend.PromptOptions) (backend.PromptResult, error)
 }
 
 type fakePromptRequest struct {
@@ -2169,6 +2243,14 @@ func (f *fakeBackendClient) CreateSession(context.Context, string) (string, erro
 
 func (f *fakeBackendClient) AbortSession(_ context.Context, sessionID string) error {
 	f.abortedSessionIDs = append(f.abortedSessionIDs, sessionID)
+	return nil
+}
+
+func (f *fakeBackendClient) CompactSession(ctx context.Context, workspacePath, sessionID string) error {
+	f.compactedSessionIDs = append(f.compactedSessionIDs, sessionID)
+	if f.compactFunc != nil {
+		return f.compactFunc(ctx, workspacePath, sessionID)
+	}
 	return nil
 }
 

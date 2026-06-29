@@ -183,6 +183,16 @@ func (c *Client) GetSessionMessages(ctx context.Context, sessionID string) ([]ba
 			Time struct {
 				Created int64 `json:"created"`
 			} `json:"time"`
+			Tokens struct {
+				Total     float64 `json:"total"`
+				Input     float64 `json:"input"`
+				Output    float64 `json:"output"`
+				Reasoning float64 `json:"reasoning"`
+				Cache     struct {
+					Read  float64 `json:"read"`
+					Write float64 `json:"write"`
+				} `json:"cache"`
+			} `json:"tokens"`
 		} `json:"info"`
 		Parts []struct {
 			Type   string `json:"type"`
@@ -205,7 +215,15 @@ func (c *Client) GetSessionMessages(ctx context.Context, sessionID string) ([]ba
 			ID:        item.Info.ID,
 			Role:      item.Info.Role,
 			CreatedAt: item.Info.Time.Created,
-			Parts:     make([]backend.SessionMessagePart, 0, len(item.Parts)),
+			Tokens: backend.TokenUsage{
+				Total:      int(item.Info.Tokens.Total),
+				Input:      int(item.Info.Tokens.Input),
+				Output:     int(item.Info.Tokens.Output),
+				Reasoning:  int(item.Info.Tokens.Reasoning),
+				CacheRead:  int(item.Info.Tokens.Cache.Read),
+				CacheWrite: int(item.Info.Tokens.Cache.Write),
+			},
+			Parts: make([]backend.SessionMessagePart, 0, len(item.Parts)),
 		}
 		for _, part := range item.Parts {
 			message.Parts = append(message.Parts, backend.SessionMessagePart{
@@ -286,6 +304,87 @@ func (c *Client) AbortSession(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("opencode abort session status: %s", resp.Status)
 	}
 	return nil
+}
+
+// CompactSession compacts the session's context using opencode's summarize
+// endpoint. Sending "/compact" as a normal message does NOT compact anything
+// (opencode's message endpoint never parses slash commands), so this hits the
+// dedicated POST /session/{id}/summarize operation instead. The session id is
+// preserved; opencode appends a compaction marker plus a summary message.
+func (c *Client) CompactSession(ctx context.Context, workspacePath, sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("opencode compact requires session id")
+	}
+
+	providerID, modelID, err := c.defaultModel(ctx, workspacePath)
+	if err != nil {
+		return err
+	}
+
+	data, err := json.Marshal(map[string]string{
+		"providerID": providerID,
+		"modelID":    modelID,
+	})
+	if err != nil {
+		return err
+	}
+
+	query := url.Values{}
+	query.Set("directory", workspacePath)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/session/"+url.PathEscape(sessionID)+"/summarize?"+query.Encode(), strings.NewReader(string(data)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bodyText, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("opencode compact status: %s body=%s", resp.Status, strings.TrimSpace(string(bodyText)))
+	}
+	return nil
+}
+
+// defaultModel resolves the workspace's effective opencode model, returned by
+// /config as "providerID/modelID". summarize requires both ids explicitly.
+func (c *Client) defaultModel(ctx context.Context, workspacePath string) (string, string, error) {
+	query := url.Values{}
+	query.Set("directory", workspacePath)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/config?"+query.Encode(), nil)
+	if err != nil {
+		return "", "", err
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyText, _ := io.ReadAll(resp.Body)
+		return "", "", fmt.Errorf("opencode config status: %s body=%s", resp.Status, strings.TrimSpace(string(bodyText)))
+	}
+
+	var payload struct {
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", "", err
+	}
+
+	provider, model, ok := strings.Cut(strings.TrimSpace(payload.Model), "/")
+	if !ok || strings.TrimSpace(provider) == "" || strings.TrimSpace(model) == "" {
+		return "", "", fmt.Errorf("opencode config has no usable model (got %q)", payload.Model)
+	}
+	return provider, model, nil
 }
 
 func (c *Client) disposeInstance(ctx context.Context, workspacePath string) error {

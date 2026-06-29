@@ -102,6 +102,8 @@ export interface SessionTranscriptResponse {
   reset: boolean
   totalMessages: number
   latestMessageId: string
+  contextTokens?: number
+  contextInputTokens?: number
   availableSessions: SessionTranscriptSessionOption[]
   messages: SessionTranscriptMessage[]
 }

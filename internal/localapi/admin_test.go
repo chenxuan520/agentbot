@@ -249,7 +249,7 @@ func TestAdminSessionTranscriptSupportsSnapshotAndIncrementalPolling(t *testing.
 		return fakeAdminTranscriptBackend{messages: []backend.SessionMessage{
 			{ID: "msg-1", Role: "user", CreatedAt: 1779785200000, Parts: []backend.SessionMessagePart{{Type: "text", Text: "hello"}}},
 			{ID: "msg-2", Role: "assistant", CreatedAt: 1779785210000, Parts: []backend.SessionMessagePart{{Type: "reasoning", Text: "thinking"}, {Type: "tool", Tool: "grep", ToolStatus: "completed", ToolInputSummary: "session"}, {Type: "text", Text: "done"}}},
-			{ID: "msg-3", Role: "assistant", CreatedAt: 1779785220000, Parts: []backend.SessionMessagePart{{Type: "step-finish", Reason: "stop"}}},
+			{ID: "msg-3", Role: "assistant", CreatedAt: 1779785220000, Tokens: backend.TokenUsage{Total: 12345, Input: 12000, Output: 300, Reasoning: 45}, Parts: []backend.SessionMessagePart{{Type: "step-finish", Reason: "stop"}}},
 		}}, nil
 	}
 	router := server.router()
@@ -284,6 +284,9 @@ func TestAdminSessionTranscriptSupportsSnapshotAndIncrementalPolling(t *testing.
 	}
 	if snapshotBody.TotalMessages != 3 || snapshotBody.LatestMessageID != "msg-3" {
 		t.Fatalf("unexpected transcript meta: %+v", snapshotBody)
+	}
+	if snapshotBody.ContextTokens != 12345 || snapshotBody.ContextInputTokens != 12000 {
+		t.Fatalf("unexpected context tokens: total=%d input=%d", snapshotBody.ContextTokens, snapshotBody.ContextInputTokens)
 	}
 	if len(snapshotBody.Messages) != 3 {
 		t.Fatalf("snapshot messages = %d, want 3", len(snapshotBody.Messages))

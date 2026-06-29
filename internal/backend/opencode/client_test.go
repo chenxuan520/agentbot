@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/chenxuan520/agentbot/internal/backend"
 )
 
 func TestNewWithOptionsUsesConfiguredTimeout(t *testing.T) {
@@ -65,7 +67,7 @@ func TestGetSessionMessagesParsesTranscriptParts(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`[
 			{"info":{"id":"msg-user","role":"user","time":{"created":1779785200000}},"parts":[{"type":"text","text":"hello"}]},
-			{"info":{"id":"msg-assistant","role":"assistant","time":{"created":1779785210000}},"parts":[{"type":"step-start"},{"type":"reasoning","text":"hidden"},{"type":"text","text":"partial"},{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"pwd"}}},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"/root/agent-bot/README.md"}}},{"type":"step-finish","reason":"tool-calls"}]}
+			{"info":{"id":"msg-assistant","role":"assistant","time":{"created":1779785210000},"tokens":{"total":14983,"input":14952,"output":7,"reasoning":24,"cache":{"read":3,"write":1}}},"parts":[{"type":"step-start"},{"type":"reasoning","text":"hidden"},{"type":"text","text":"partial"},{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"pwd"}}},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"/root/agent-bot/README.md"}}},{"type":"step-finish","reason":"tool-calls"}]}
 		]`))
 	}))
 	defer server.Close()
@@ -97,5 +99,9 @@ func TestGetSessionMessagesParsesTranscriptParts(t *testing.T) {
 	}
 	if messages[1].Parts[5].Reason != "tool-calls" {
 		t.Fatalf("finish reason = %q, want tool-calls", messages[1].Parts[5].Reason)
+	}
+	wantTokens := backend.TokenUsage{Total: 14983, Input: 14952, Output: 7, Reasoning: 24, CacheRead: 3, CacheWrite: 1}
+	if messages[1].Tokens != wantTokens {
+		t.Fatalf("assistant tokens = %+v, want %+v", messages[1].Tokens, wantTokens)
 	}
 }

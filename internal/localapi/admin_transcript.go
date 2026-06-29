@@ -38,12 +38,14 @@ type adminTranscriptSessionOption struct {
 }
 
 type adminTranscriptResponse struct {
-	SessionID         string                         `json:"sessionId"`
-	Reset             bool                           `json:"reset"`
-	TotalMessages     int                            `json:"totalMessages"`
-	LatestMessageID   string                         `json:"latestMessageId"`
-	AvailableSessions []adminTranscriptSessionOption `json:"availableSessions"`
-	Messages          []adminTranscriptMessage       `json:"messages"`
+	SessionID          string                         `json:"sessionId"`
+	Reset              bool                           `json:"reset"`
+	TotalMessages      int                            `json:"totalMessages"`
+	LatestMessageID    string                         `json:"latestMessageId"`
+	ContextTokens      int                            `json:"contextTokens"`
+	ContextInputTokens int                            `json:"contextInputTokens"`
+	AvailableSessions  []adminTranscriptSessionOption `json:"availableSessions"`
+	Messages           []adminTranscriptMessage       `json:"messages"`
 }
 
 func (s *Server) handleAdminSessionTranscript(c *gin.Context) {
@@ -150,37 +152,48 @@ func buildTranscriptResponse(sessionID, requestedSessionID, afterMessageID strin
 	if len(allMessages) > 0 {
 		latestMessageID = strings.TrimSpace(allMessages[len(allMessages)-1].ID)
 	}
+	contextTokens, contextInputTokens := 0, 0
+	if usage, ok := backend.LatestContextTokens(allMessages); ok {
+		contextTokens = usage.Total
+		contextInputTokens = usage.Input
+	}
 	if strings.TrimSpace(sessionID) == "" {
 		return adminTranscriptResponse{SessionID: "", Reset: true, TotalMessages: 0, LatestMessageID: "", AvailableSessions: availableSessions, Messages: []adminTranscriptMessage{}}
 	}
 	if strings.TrimSpace(requestedSessionID) == "" || strings.TrimSpace(requestedSessionID) != strings.TrimSpace(sessionID) || strings.TrimSpace(afterMessageID) == "" {
 		return adminTranscriptResponse{
-			SessionID:         sessionID,
-			Reset:             true,
-			TotalMessages:     len(allMessages),
-			LatestMessageID:   latestMessageID,
-			AvailableSessions: availableSessions,
-			Messages:          marshalTranscriptMessages(transcriptSnapshotMessages(allMessages, transcriptWindowSize)),
+			SessionID:          sessionID,
+			Reset:              true,
+			TotalMessages:      len(allMessages),
+			LatestMessageID:    latestMessageID,
+			ContextTokens:      contextTokens,
+			ContextInputTokens: contextInputTokens,
+			AvailableSessions:  availableSessions,
+			Messages:           marshalTranscriptMessages(transcriptSnapshotMessages(allMessages, transcriptWindowSize)),
 		}
 	}
 	afterIndex := transcriptMessageIndex(allMessages, afterMessageID)
 	if afterIndex < 0 {
 		return adminTranscriptResponse{
-			SessionID:         sessionID,
-			Reset:             true,
-			TotalMessages:     len(allMessages),
-			LatestMessageID:   latestMessageID,
-			AvailableSessions: availableSessions,
-			Messages:          marshalTranscriptMessages(transcriptSnapshotMessages(allMessages, transcriptWindowSize)),
+			SessionID:          sessionID,
+			Reset:              true,
+			TotalMessages:      len(allMessages),
+			LatestMessageID:    latestMessageID,
+			ContextTokens:      contextTokens,
+			ContextInputTokens: contextInputTokens,
+			AvailableSessions:  availableSessions,
+			Messages:           marshalTranscriptMessages(transcriptSnapshotMessages(allMessages, transcriptWindowSize)),
 		}
 	}
 	return adminTranscriptResponse{
-		SessionID:         sessionID,
-		Reset:             false,
-		TotalMessages:     len(allMessages),
-		LatestMessageID:   latestMessageID,
-		AvailableSessions: availableSessions,
-		Messages:          marshalTranscriptMessages(allMessages[afterIndex:]),
+		SessionID:          sessionID,
+		Reset:              false,
+		TotalMessages:      len(allMessages),
+		LatestMessageID:    latestMessageID,
+		ContextTokens:      contextTokens,
+		ContextInputTokens: contextInputTokens,
+		AvailableSessions:  availableSessions,
+		Messages:           marshalTranscriptMessages(allMessages[afterIndex:]),
 	}
 }
 

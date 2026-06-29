@@ -14,7 +14,7 @@ import (
 	"github.com/chenxuan520/agentbot/internal/workspace"
 )
 
-const helpText = "**可用命令**\n1. `/help` 查看帮助\n2. `/info` 查看当前会话信息\n3. `/peek` 查看当前 session 的最新输出快照\n4. `/roles` 查看或切换当前会话 role\n5. `/compress` 对当前 session 执行 `/compact`\n6. `/new` 重置当前 session，下一条普通消息新建\n7. `/attach <session-id>` 绑定同一 workspace path 下的 opencode session\n8. `/clear` 清空当前会话绑定的 session\n9. `/abort` 中断当前会话里正在跑的 agent\n10. `/unblock` 解除当前会话的 refuse 屏蔽\n11. `/btw <text>` 使用你在当前对话里的独立 btw session 处理这条消息\n12. `/btw-clear` 清空你在当前对话里的 btw session\n13. `/connect-local` 把当前会话切到已连接的本地 agent\n14. `/connect-bot` 切回 bot（本地 agent 仍保持连接）\n15. `/disconnect-local` 强制断开本地 agent 连接\n\n_topic-session 模式：针对 session 的命令（`/peek` `/clear` `/new` `/compress` `/abort` `/attach`）作用于命令所在话题。在话题外执行 `/peek` `/compress` `/abort` `/attach` 会提示先进入话题；`/clear` `/new` 在话题外则重置整个会话的所有话题 session。_"
+const helpText = "**可用命令**\n1. `/help` 查看帮助\n2. `/info` 查看当前会话信息\n3. `/peek` 查看当前 session 的最新输出快照\n4. `/roles` 查看或切换当前会话 role\n5. `/compress` 压缩当前 session 的上下文（opencode compact）\n6. `/new` 重置当前 session，下一条普通消息新建\n7. `/attach <session-id>` 绑定同一 workspace path 下的 opencode session\n8. `/clear` 清空当前会话绑定的 session\n9. `/abort` 中断当前会话里正在跑的 agent\n10. `/unblock` 解除当前会话的 refuse 屏蔽\n11. `/btw <text>` 使用你在当前对话里的独立 btw session 处理这条消息\n12. `/btw-clear` 清空你在当前对话里的 btw session\n13. `/connect-local` 把当前会话切到已连接的本地 agent\n14. `/connect-bot` 切回 bot（本地 agent 仍保持连接）\n15. `/disconnect-local` 强制断开本地 agent 连接\n\n_topic-session 模式：针对 session 的命令（`/peek` `/clear` `/new` `/compress` `/abort` `/attach`）作用于命令所在话题。在话题外执行 `/peek` `/compress` `/abort` `/attach` 会提示先进入话题；`/clear` `/new` 在话题外则重置整个会话的所有话题 session。_"
 
 type commandResult struct {
 	handled   bool
@@ -122,7 +122,8 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 		}
 		remoteEnabled := current.Workspace.Settings.Settings.RemoteEnabled
 		remoteRoute := remoteRouteStatus(s.remote, ref, remoteEnabled)
-		return commandResult{handled: true, replyText: buildInfoText(ref, current, sessionToken, topicKey, topicSessionID, s.cfg.WebBaseURL, remoteEnabled, remoteRoute)}, nil
+		contextTokens := s.sessionContextTokens(ctx, current, topicSessionID)
+		return commandResult{handled: true, replyText: buildInfoText(ref, current, sessionToken, topicKey, topicSessionID, s.cfg.WebBaseURL, remoteEnabled, remoteRoute, contextTokens)}, nil
 	case "/peek":
 		current, err := s.sessions.Current(ref)
 		if err != nil {
@@ -196,14 +197,14 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 		if err != nil {
 			return commandResult{}, err
 		}
-		result, err := client.Prompt(ctx, current.Workspace.Path, target.sessionID, "/compact", nil, backend.PromptOptions{})
-		if err != nil {
+		compactor, ok := client.(backend.SessionCompactor)
+		if !ok {
+			return commandResult{handled: true, replyText: fmt.Sprintf("当前 backend `%s` 不支持 `/compress`。", current.AgentBackend)}, nil
+		}
+		if err := compactor.CompactSession(ctx, current.Workspace.Path, target.sessionID); err != nil {
 			return commandResult{}, err
 		}
-		if err := s.bindCommandSession(ref, target, current.AgentBackend, result.SessionID); err != nil {
-			return commandResult{}, err
-		}
-		return commandResult{handled: true, replyText: result.ReplyText, viaAgent: true}, nil
+		return commandResult{handled: true, replyText: "已压缩当前 session 的上下文。"}, nil
 	case "/new":
 		current, err := s.sessions.Current(ref)
 		if err != nil {
@@ -375,7 +376,40 @@ func remoteRouteStatus(remote remoteRouter, ref conversation.Ref, enabled bool) 
 	return "bot (已手动切回)"
 }
 
-func buildInfoText(ref conversation.Ref, current *session.CurrentSession, sessionToken, topicKey, topicSessionID, webBaseURL string, remoteEnabled bool, remoteRoute string) string {
+// sessionContextTokens reports the latest assistant turn's token usage for the
+// session /info is about (the topic session when inside a topic, otherwise the
+// main active session). It is best-effort: any failure yields an empty string
+// so /info still renders without the context line.
+func (s *Service) sessionContextTokens(ctx context.Context, current *session.CurrentSession, topicSessionID string) string {
+	sessionID := strings.TrimSpace(topicSessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(current.ActiveSessionID)
+	}
+	if sessionID == "" || s.backends == nil {
+		return ""
+	}
+	client, err := s.backends(s.cfg, current.Workspace.Settings)
+	if err != nil {
+		return ""
+	}
+	lookup, ok := client.(backend.SessionMessageLookup)
+	if !ok {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	messages, err := lookup.GetSessionMessages(ctx, sessionID)
+	if err != nil {
+		return ""
+	}
+	tokens, ok := backend.LatestContextTokens(messages)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("%d (input %d)", tokens.Total, tokens.Input)
+}
+
+func buildInfoText(ref conversation.Ref, current *session.CurrentSession, sessionToken, topicKey, topicSessionID, webBaseURL string, remoteEnabled bool, remoteRoute, contextTokens string) string {
 	consoleURL := buildConsoleURL(webBaseURL, sessionToken)
 	lines := []string{
 		linkedSectionTitle("当前会话", consoleURL),
@@ -410,6 +444,9 @@ func buildInfoText(ref conversation.Ref, current *session.CurrentSession, sessio
 			fmt.Sprintf("topic_id: %s", defaultValue(topicKey, "-")),
 			fmt.Sprintf("topic_session_id: %s", defaultValue(topicSessionID, "-")),
 		)
+	}
+	if strings.TrimSpace(contextTokens) != "" {
+		lines = append(lines, fmt.Sprintf("context_tokens: %s", contextTokens))
 	}
 	lines = append(lines,
 		fmt.Sprintf("reply_mode: %s", current.Workspace.Settings.Settings.ReplyMode),

@@ -68,6 +68,8 @@ interface TranscriptState {
   sessionId: string
   latestMessageId: string
   totalMessages: number
+  contextTokens: number
+  contextInputTokens: number
   availableSessions: SessionTranscriptSessionOption[]
   messages: SessionTranscriptMessage[]
 }
@@ -270,6 +272,8 @@ function createTranscriptState(): TranscriptState {
     sessionId: '',
     latestMessageId: '',
     totalMessages: 0,
+    contextTokens: 0,
+    contextInputTokens: 0,
     availableSessions: [],
     messages: [],
   }
@@ -294,6 +298,8 @@ function mergeTranscriptState(current: TranscriptState, incoming: SessionTranscr
       sessionId: incoming.sessionId,
       latestMessageId: incoming.latestMessageId,
       totalMessages: incoming.totalMessages,
+      contextTokens: incoming.contextTokens ?? 0,
+      contextInputTokens: incoming.contextInputTokens ?? 0,
       availableSessions: incoming.availableSessions,
       messages,
     }
@@ -311,6 +317,8 @@ function mergeTranscriptState(current: TranscriptState, incoming: SessionTranscr
     sessionId: incoming.sessionId,
     latestMessageId: incoming.latestMessageId || (messages.length ? messages[messages.length - 1].id : ''),
     totalMessages: incoming.totalMessages,
+    contextTokens: incoming.contextTokens ?? current.contextTokens,
+    contextInputTokens: incoming.contextInputTokens ?? current.contextInputTokens,
     availableSessions: incoming.availableSessions,
     messages,
   }
@@ -1821,6 +1829,7 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
                   <div>loaded_session_id: <span className="mono">{transcript.sessionId || '-'}</span></div>
                   <div>latest_message_id: <span className="mono">{transcript.latestMessageId || '-'}</span></div>
                   <div>message_count: visible <span className="mono">{visibleTranscriptMessages.length}</span> / loaded <span className="mono">{transcript.messages.length}</span> / total <span className="mono">{transcript.totalMessages}</span></div>
+                  <div>context_tokens: <span className="mono">{transcript.contextTokens ? `${transcript.contextTokens}${transcript.contextInputTokens ? ` (input ${transcript.contextInputTokens})` : ''}` : '-'}</span></div>
                 </div>
 
                 {transcriptError ? <div className="info-banner">{transcriptError}</div> : null}
