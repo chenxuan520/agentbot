@@ -123,7 +123,8 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 		remoteEnabled := current.Workspace.Settings.Settings.RemoteEnabled
 		remoteRoute := remoteRouteStatus(s.remote, ref, remoteEnabled)
 		contextTokens := s.sessionContextTokens(ctx, current, topicSessionID)
-		return commandResult{handled: true, replyText: buildInfoText(ref, current, sessionToken, topicKey, topicSessionID, s.cfg.WebBaseURL, remoteEnabled, remoteRoute, contextTokens)}, nil
+		model := s.sessionModel(ctx, current)
+		return commandResult{handled: true, replyText: buildInfoText(ref, current, sessionToken, topicKey, topicSessionID, s.cfg.WebBaseURL, remoteEnabled, remoteRoute, contextTokens, model)}, nil
 	case "/peek":
 		current, err := s.sessions.Current(ref)
 		if err != nil {
@@ -409,7 +410,35 @@ func (s *Service) sessionContextTokens(ctx context.Context, current *session.Cur
 	return fmt.Sprintf("%d (input %d)", tokens.Total, tokens.Input)
 }
 
-func buildInfoText(ref conversation.Ref, current *session.CurrentSession, sessionToken, topicKey, topicSessionID, webBaseURL string, remoteEnabled bool, remoteRoute, contextTokens string) string {
+// sessionModel reports the model /info should show as "in effect": the
+// per-conversation override when set (passed per message), otherwise the
+// backend's own default. It is best-effort: any failure yields an empty string
+// so /info still renders.
+func (s *Service) sessionModel(ctx context.Context, current *session.CurrentSession) string {
+	if override := strings.TrimSpace(current.Workspace.Settings.Agent.Model); override != "" {
+		return override
+	}
+	if s.backends == nil {
+		return ""
+	}
+	client, err := s.backends(s.cfg, current.Workspace.Settings)
+	if err != nil {
+		return ""
+	}
+	catalog, ok := client.(backend.SessionModelCatalog)
+	if !ok {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	model, err := catalog.CurrentModel(ctx, current.Workspace.Path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(model)
+}
+
+func buildInfoText(ref conversation.Ref, current *session.CurrentSession, sessionToken, topicKey, topicSessionID, webBaseURL string, remoteEnabled bool, remoteRoute, contextTokens, model string) string {
 	consoleURL := buildConsoleURL(webBaseURL, sessionToken)
 	lines := []string{
 		linkedSectionTitle("当前会话", consoleURL),
@@ -431,6 +460,7 @@ func buildInfoText(ref conversation.Ref, current *session.CurrentSession, sessio
 		"**当前 agent**",
 		"```text",
 		fmt.Sprintf("backend: %s", current.AgentBackend),
+		fmt.Sprintf("model: %s", defaultValue(model, "-")),
 		fmt.Sprintf("remote_enabled: %t", remoteEnabled),
 		fmt.Sprintf("remote_route: %s", remoteRoute),
 		fmt.Sprintf("agents_mode: %s", current.Workspace.Settings.Agent.AgentsMode),

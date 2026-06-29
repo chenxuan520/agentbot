@@ -14,6 +14,7 @@ import type {
   SessionAgentsFile,
   SessionAgentsMode,
   SessionDetail as SessionDetailType,
+  SessionModelsResponse,
   SessionRef,
   SessionSettings,
   SessionSummary,
@@ -464,6 +465,8 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
   const [repos, setRepos] = useState<RepoSummary[]>([])
   const [settingsDraft, setSettingsDraft] = useState<SessionSettings | null>(null)
   const [opencodeConfigText, setOpencodeConfigText] = useState('')
+  const [models, setModels] = useState<SessionModelsResponse | null>(null)
+  const [modelsLoading, setModelsLoading] = useState(false)
   const [remoteStatus, setRemoteStatus] = useState<RemoteAgentStatus | null>(null)
   const [agentsFile, setAgentsFile] = useState<SessionAgentsFile | null>(null)
   const [agentsModeDraft, setAgentsModeDraft] = useState<SessionAgentsMode>('template')
@@ -755,6 +758,36 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
       return
     }
     void loadTranscript({ loading: true })
+  }, [activeTab, api, sessionRef])
+
+  useEffect(() => {
+    if (activeTab !== 'settings') {
+      return
+    }
+    let cancelled = false
+    setModelsLoading(true)
+    void api
+      .getSessionModels(sessionRef)
+      .then((result) => {
+        if (!cancelled) {
+          setModels(result)
+        }
+      })
+      .catch(() => {
+        // Best-effort: the dropdown still works for the current/custom value
+        // even if the catalog cannot be listed.
+        if (!cancelled) {
+          setModels(null)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setModelsLoading(false)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
   }, [activeTab, api, sessionRef])
 
   async function handleSettingsSave() {
@@ -1270,6 +1303,57 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
                 </label>
 
                 <label>
+                  <span>Model</span>
+                  <select
+                    value={settingsDraft.agent.model ?? ''}
+                    onChange={(event) =>
+                      setSettingsDraft((current) =>
+                        current ? { ...current, agent: { ...current.agent, model: event.target.value } } : current,
+                      )
+                    }
+                    disabled={modelsLoading}
+                  >
+                    <option value="">（默认 / 跟随全局）</option>
+                    {(() => {
+                      const selected = settingsDraft.agent.model ?? ''
+                      const providers = models?.providers ?? []
+                      const known = providers.some((provider) =>
+                        provider.models.some((model) => `${provider.id}/${model.id}` === selected),
+                      )
+                      return (
+                        <>
+                          {selected && !known ? (
+                            <option value={selected}>{selected}（自定义）</option>
+                          ) : null}
+                          {providers.map((provider) => (
+                            <optgroup key={provider.id} label={provider.name || provider.id}>
+                              {provider.models.map((model) => {
+                                const value = `${provider.id}/${model.id}`
+                                return (
+                                  <option key={value} value={value}>
+                                    {model.name || model.id}
+                                    {provider.default === model.id ? ' ·默认' : ''}
+                                  </option>
+                                )
+                              })}
+                            </optgroup>
+                          ))}
+                        </>
+                      )
+                    })()}
+                  </select>
+                  <div className="muted small">
+                    {modelsLoading
+                      ? '加载可用模型…'
+                      : (settingsDraft.agent.model ?? '')
+                        ? '按条消息生效，保存后下一条消息即用该模型'
+                        : models?.current
+                          ? `默认（实际使用 ${models.current}）`
+                          : '默认（跟随后端）'}
+                  </div>
+                </label>
+
+                <label>
                   <span>Reply Mode</span>
                   <select
                     value={settingsDraft.settings.replyMode}
@@ -1415,7 +1499,10 @@ export function SessionDetail({ api, sessionRef, scope, summary, onBack, onDispl
               <div className="settings-card role-settings-card">
                 <div>
                   <div className="panel-title">高级 OpenCode 配置</div>
-                  <div className="muted small">给当前 session 写 `opencodeConfig` patch。留空表示不写。</div>
+                  <div className="muted small">
+                    给当前 session 写 `opencodeConfig` patch（merge 进 workspace 的 opencode.json）。模型请用上面的 Model
+                    下拉；这里用于 permission / mcp / instructions / small_model / provider 等其它配置。留空表示不写。
+                  </div>
                 </div>
                 <textarea
                   className="role-advanced-textarea mono"

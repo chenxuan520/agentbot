@@ -105,3 +105,71 @@ func TestGetSessionMessagesParsesTranscriptParts(t *testing.T) {
 		t.Fatalf("assistant tokens = %+v, want %+v", messages[1].Tokens, wantTokens)
 	}
 }
+
+func TestListModelsGroupsProvidersAndReportsCurrent(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/config/providers":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"providers":[{"id":"openai","name":"OpenAI","models":{"gpt-5.5":{"id":"gpt-5.5","name":"GPT-5.5","limit":{"context":400000}},"gpt-5.4":{"id":"gpt-5.4","name":"GPT-5.4","limit":{"context":1050000}}}}],"default":{"openai":"gpt-5.5"}}`))
+		case "/config":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"model":"openai/gpt-5.4"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := New(server.URL)
+	client.httpClient = server.Client()
+
+	catalog, err := client.ListModels(context.Background(), "/tmp/workspace")
+	if err != nil {
+		t.Fatalf("list models: %v", err)
+	}
+	if catalog.Current != "openai/gpt-5.4" {
+		t.Fatalf("current = %q, want openai/gpt-5.4", catalog.Current)
+	}
+	if len(catalog.Providers) != 1 {
+		t.Fatalf("provider count = %d, want 1", len(catalog.Providers))
+	}
+	provider := catalog.Providers[0]
+	if provider.ID != "openai" || provider.Name != "OpenAI" || provider.Default != "gpt-5.5" {
+		t.Fatalf("unexpected provider: %+v", provider)
+	}
+	// Models are sorted by id for deterministic output.
+	if len(provider.Models) != 2 || provider.Models[0].ID != "gpt-5.4" || provider.Models[1].ID != "gpt-5.5" {
+		t.Fatalf("unexpected models: %+v", provider.Models)
+	}
+	if provider.Models[0].ContextLimit != 1050000 || provider.Models[0].Name != "GPT-5.4" {
+		t.Fatalf("unexpected first model: %+v", provider.Models[0])
+	}
+}
+
+func TestCurrentModelCombinesProviderAndModel(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/config" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"opencode/big-pickle"}`))
+	}))
+	defer server.Close()
+
+	client := New(server.URL)
+	client.httpClient = server.Client()
+
+	model, err := client.CurrentModel(context.Background(), "/tmp/workspace")
+	if err != nil {
+		t.Fatalf("current model: %v", err)
+	}
+	if model != "opencode/big-pickle" {
+		t.Fatalf("model = %q, want opencode/big-pickle", model)
+	}
+}

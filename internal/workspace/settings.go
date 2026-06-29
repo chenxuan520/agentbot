@@ -34,7 +34,13 @@ type Settings struct {
 }
 
 type AgentConfig struct {
-	Backend                    string         `json:"backend"`
+	Backend string `json:"backend"`
+	// Model overrides the backend model for this conversation as
+	// "providerID/modelID". Empty means follow the backend's own default. For
+	// opencode it is passed per message (the opencode serve process is often
+	// launched with an env-pinned model that a workspace opencode.json cannot
+	// override), so it is intentionally NOT written into opencode.json.
+	Model                      string         `json:"model,omitempty"`
 	AgentsMode                 string         `json:"agentsMode,omitempty"`
 	OpencodeConfig             map[string]any `json:"opencodeConfig,omitempty"`
 	OpencodeHTTPTimeoutSeconds int            `json:"opencodeHTTPTimeoutSeconds,omitempty"`

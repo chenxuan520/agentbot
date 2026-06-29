@@ -121,6 +121,15 @@ func (c *Client) promptOnce(ctx context.Context, workspacePath, sessionID, text 
 	if strings.TrimSpace(options.System) != "" {
 		body["system"] = options.System
 	}
+	if providerID, modelID, ok := splitModel(options.Model); ok {
+		// opencode's message endpoint accepts a per-message model override
+		// ({providerID, modelID}). This is the only reliable way to switch
+		// models when opencode serve was launched with an env-pinned model.
+		body["model"] = map[string]string{
+			"providerID": providerID,
+			"modelID":    modelID,
+		}
+	}
 
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -197,6 +206,18 @@ func (c *Client) promptOnce(ctx context.Context, workspacePath, sessionID, text 
 func readAll(reader io.Reader) (string, error) {
 	data, err := io.ReadAll(reader)
 	return string(data), err
+}
+
+// splitModel parses a "providerID/modelID" string. It returns ok=false for an
+// empty or malformed value so the caller can omit the model override.
+func splitModel(model string) (string, string, bool) {
+	provider, id, found := strings.Cut(strings.TrimSpace(model), "/")
+	provider = strings.TrimSpace(provider)
+	id = strings.TrimSpace(id)
+	if !found || provider == "" || id == "" {
+		return "", "", false
+	}
+	return provider, id, true
 }
 
 func extractResponseText(parts []map[string]any) string {

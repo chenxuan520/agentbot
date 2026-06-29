@@ -667,6 +667,39 @@ func TestBeforeMessageHookCanRewriteText(t *testing.T) {
 	}
 }
 
+func TestPromptUsesConfiguredModel(t *testing.T) {
+	t.Parallel()
+
+	service, _, fakeBackend, _, _, ref := newTestFlowService(t)
+	current, err := service.sessions.Current(ref)
+	if err != nil {
+		t.Fatalf("current session: %v", err)
+	}
+	settings := current.Workspace.Settings
+	settings.Agent.Model = "openai/gpt-5.5-pro"
+	if err := workspace.SaveSettings(current.Workspace.Path, settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	if _, err := service.ProcessText(context.Background(), TextInput{
+		Provider:         ref.Provider,
+		ConversationID:   ref.ConversationID,
+		ConversationType: "group",
+		MessageID:        "om-model",
+		SenderID:         "ou-user",
+		Text:             "hello",
+	}); err != nil {
+		t.Fatalf("process text: %v", err)
+	}
+
+	if len(fakeBackend.promptRequests) != 1 {
+		t.Fatalf("prompt requests = %d, want 1", len(fakeBackend.promptRequests))
+	}
+	if got := fakeBackend.promptRequests[0].options.Model; got != "openai/gpt-5.5-pro" {
+		t.Fatalf("prompt model = %q, want openai/gpt-5.5-pro", got)
+	}
+}
+
 func TestBeforeMessageHookCanSetSystemText(t *testing.T) {
 	t.Parallel()
 
@@ -915,7 +948,7 @@ func TestBuildInfoTextIncludesClickableCurrentSessionTitle(t *testing.T) {
 		},
 		AgentBackend: "opencode",
 	}
-	text := buildInfoText(conversation.Ref{Provider: "feishu", ConversationID: "oc_demo"}, current, "abt_sess_demo", "", "", "https://agent-bot.example.com", false, "disabled", "")
+	text := buildInfoText(conversation.Ref{Provider: "feishu", ConversationID: "oc_demo"}, current, "abt_sess_demo", "", "", "https://agent-bot.example.com", false, "disabled", "", "")
 	if !strings.Contains(text, "[**当前会话**](https://agent-bot.example.com/?token=abt_sess_demo)") {
 		t.Fatalf("info text missing clickable title: %q", text)
 	}
@@ -938,6 +971,7 @@ func TestInfoCommandShowsContextTokens(t *testing.T) {
 		{ID: "m-user", Role: "user"},
 		{ID: "m-assistant", Role: "assistant", Tokens: backend.TokenUsage{Total: 14983, Input: 14952, Output: 7}},
 	}
+	fakeBackend.currentModel = "ttadk_openai/gpt-5.4"
 
 	result, err := service.ProcessText(context.Background(), TextInput{
 		Provider:         ref.Provider,
@@ -952,6 +986,9 @@ func TestInfoCommandShowsContextTokens(t *testing.T) {
 	}
 	if !strings.Contains(result.ReplyText, "context_tokens: 14983 (input 14952)") {
 		t.Fatalf("missing context tokens in reply: %q", result.ReplyText)
+	}
+	if !strings.Contains(result.ReplyText, "model: ttadk_openai/gpt-5.4") {
+		t.Fatalf("missing model in reply: %q", result.ReplyText)
 	}
 }
 
@@ -2155,6 +2192,8 @@ type fakeBackendClient struct {
 	compactedSessionIDs []string
 	compactFunc         func(ctx context.Context, workspacePath, sessionID string) error
 	promptFunc          func(ctx context.Context, workspacePath, sessionID, text string, attachments []backend.Attachment, options backend.PromptOptions) (backend.PromptResult, error)
+	currentModel        string
+	modelCatalog        backend.ModelCatalog
 }
 
 type fakePromptRequest struct {
@@ -2252,6 +2291,18 @@ func (f *fakeBackendClient) CompactSession(ctx context.Context, workspacePath, s
 		return f.compactFunc(ctx, workspacePath, sessionID)
 	}
 	return nil
+}
+
+func (f *fakeBackendClient) ListModels(_ context.Context, _ string) (backend.ModelCatalog, error) {
+	catalog := f.modelCatalog
+	if catalog.Current == "" {
+		catalog.Current = f.currentModel
+	}
+	return catalog, nil
+}
+
+func (f *fakeBackendClient) CurrentModel(_ context.Context, _ string) (string, error) {
+	return f.currentModel, nil
 }
 
 func (f *fakeBackendClient) GetSession(_ context.Context, sessionID string) (backend.SessionInfo, error) {

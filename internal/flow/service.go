@@ -178,6 +178,7 @@ func (s *Service) promptConversationBTW(ctx context.Context, ref conversation.Re
 		}
 	}
 
+	options.Model = strings.TrimSpace(prepared.Workspace.Settings.Agent.Model)
 	result, err := client.Prompt(ctx, prepared.Workspace.Path, sessionID, text, attachments, options)
 	if err != nil {
 		return PromptResult{}, err
@@ -220,6 +221,7 @@ func (s *Service) promptConversationSlot(ctx context.Context, ref conversation.R
 		}
 	}
 
+	options.Model = strings.TrimSpace(prepared.Workspace.Settings.Agent.Model)
 	result, err := client.Prompt(ctx, prepared.Workspace.Path, sessionID, text, attachments, options)
 	if err != nil {
 		return PromptResult{}, err
@@ -265,6 +267,7 @@ func (s *Service) promptConversationTopic(ctx context.Context, ref conversation.
 		}
 	}
 
+	options.Model = strings.TrimSpace(prepared.Workspace.Settings.Agent.Model)
 	result, err := client.Prompt(ctx, prepared.Workspace.Path, sessionID, text, attachments, options)
 	if err != nil {
 		return PromptResult{}, err

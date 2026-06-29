@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -349,6 +350,94 @@ func (c *Client) CompactSession(ctx context.Context, workspacePath, sessionID st
 		return fmt.Errorf("opencode compact status: %s body=%s", resp.Status, strings.TrimSpace(string(bodyText)))
 	}
 	return nil
+}
+
+// CurrentModel returns the workspace's effective model as "providerID/modelID".
+func (c *Client) CurrentModel(ctx context.Context, workspacePath string) (string, error) {
+	provider, model, err := c.defaultModel(ctx, workspacePath)
+	if err != nil {
+		return "", err
+	}
+	return provider + "/" + model, nil
+}
+
+// ListModels reports the models opencode can run for the workspace, grouped by
+// connected provider, plus the currently effective model. It reads opencode's
+// /config/providers (the filtered, configured set) rather than /provider (the
+// full catalog of everything opencode knows).
+func (c *Client) ListModels(ctx context.Context, workspacePath string) (backend.ModelCatalog, error) {
+	query := url.Values{}
+	query.Set("directory", workspacePath)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/config/providers?"+query.Encode(), nil)
+	if err != nil {
+		return backend.ModelCatalog{}, err
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return backend.ModelCatalog{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyText, _ := io.ReadAll(resp.Body)
+		return backend.ModelCatalog{}, fmt.Errorf("opencode config providers status: %s body=%s", resp.Status, strings.TrimSpace(string(bodyText)))
+	}
+
+	var payload struct {
+		Providers []struct {
+			ID     string `json:"id"`
+			Name   string `json:"name"`
+			Models map[string]struct {
+				ID    string `json:"id"`
+				Name  string `json:"name"`
+				Limit struct {
+					Context float64 `json:"context"`
+				} `json:"limit"`
+			} `json:"models"`
+		} `json:"providers"`
+		Default map[string]string `json:"default"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return backend.ModelCatalog{}, err
+	}
+
+	catalog := backend.ModelCatalog{Providers: make([]backend.ModelProvider, 0, len(payload.Providers))}
+	for _, provider := range payload.Providers {
+		entry := backend.ModelProvider{
+			ID:      provider.ID,
+			Name:    provider.Name,
+			Default: payload.Default[provider.ID],
+			Models:  make([]backend.ModelInfo, 0, len(provider.Models)),
+		}
+		for id, model := range provider.Models {
+			modelID := strings.TrimSpace(model.ID)
+			if modelID == "" {
+				modelID = id
+			}
+			name := strings.TrimSpace(model.Name)
+			if name == "" {
+				name = modelID
+			}
+			entry.Models = append(entry.Models, backend.ModelInfo{
+				ID:           modelID,
+				Name:         name,
+				ContextLimit: int(model.Limit.Context),
+			})
+		}
+		// Map iteration order is random; sort for stable output.
+		sort.Slice(entry.Models, func(i, j int) bool {
+			return entry.Models[i].ID < entry.Models[j].ID
+		})
+		catalog.Providers = append(catalog.Providers, entry)
+	}
+
+	// Current model is best-effort: a missing default should not fail the list.
+	if current, err := c.CurrentModel(ctx, workspacePath); err == nil {
+		catalog.Current = current
+	}
+	return catalog, nil
 }
 
 // defaultModel resolves the workspace's effective opencode model, returned by

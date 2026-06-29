@@ -128,6 +128,7 @@ func (s *Server) router() *gin.Engine {
 	admin.POST("/sessions/display-names", s.handleAdminSessionDisplayNames)
 	admin.GET("/sessions/:provider/:conversationId", s.handleAdminSessionDetail)
 	admin.GET("/sessions/:provider/:conversationId/transcript", s.handleAdminSessionTranscript)
+	admin.GET("/sessions/:provider/:conversationId/models", s.handleAdminSessionModels)
 	admin.GET("/sessions/:provider/:conversationId/remote-status", s.handleAdminRemoteStatus)
 	admin.DELETE("/sessions/:provider/:conversationId", s.handleAdminSessionDelete)
 	admin.GET("/sessions/:provider/:conversationId/session-skills", s.handleAdminSessionSkillList)

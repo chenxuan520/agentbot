@@ -27,6 +27,41 @@ type SessionCompactor interface {
 	CompactSession(ctx context.Context, workspacePath, sessionID string) error
 }
 
+// SessionModelCatalog reports the models a backend can run for a workspace and
+// the model currently in effect. Backends without a notion of selectable models
+// simply omit this interface.
+type SessionModelCatalog interface {
+	// ListModels returns the selectable models grouped by provider plus the
+	// currently effective model id ("providerID/modelID").
+	ListModels(ctx context.Context, workspacePath string) (ModelCatalog, error)
+	// CurrentModel returns the effective model id ("providerID/modelID") used
+	// for new turns in the workspace.
+	CurrentModel(ctx context.Context, workspacePath string) (string, error)
+}
+
+// ModelCatalog is the set of selectable models for a workspace plus the model
+// currently in effect.
+type ModelCatalog struct {
+	// Current is the effective model id ("providerID/modelID"), possibly empty.
+	Current   string
+	Providers []ModelProvider
+}
+
+// ModelProvider groups a provider's selectable models.
+type ModelProvider struct {
+	ID      string
+	Name    string
+	Default string
+	Models  []ModelInfo
+}
+
+// ModelInfo describes one selectable model.
+type ModelInfo struct {
+	ID           string
+	Name         string
+	ContextLimit int
+}
+
 type SessionInfo struct {
 	ID        string
 	Directory string
@@ -83,6 +118,10 @@ type SessionMessagePart struct {
 type PromptOptions struct {
 	NoReply bool
 	System  string
+	// Model, when set ("providerID/modelID"), overrides the backend's default
+	// model for this single prompt. Backends that cannot switch models per
+	// request ignore it.
+	Model string
 }
 
 type Attachment struct {

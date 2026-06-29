@@ -95,6 +95,83 @@ func TestPromptContinuesAfterRetryStatusOnly(t *testing.T) {
 	}
 }
 
+func TestPromptSendsModelOverrideWhenSet(t *testing.T) {
+	t.Parallel()
+
+	type capturedModel struct {
+		ProviderID string `json:"providerID"`
+		ModelID    string `json:"modelID"`
+	}
+	var mu sync.Mutex
+	var gotModel *capturedModel
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/session/session-1/message" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var body struct {
+			Model *capturedModel `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		mu.Lock()
+		gotModel = body.Model
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"info":{"sessionID":"session-1"},"parts":[{"type":"text","text":"ok"},{"type":"step-finish","reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	client := New(server.URL)
+	client.httpClient = server.Client()
+	if _, err := client.Prompt(context.Background(), "/tmp/workspace", "session-1", "hello", nil, backend.PromptOptions{Model: "openai/gpt-5.5-pro"}); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gotModel == nil {
+		t.Fatal("expected model override in request body, got none")
+	}
+	if gotModel.ProviderID != "openai" || gotModel.ModelID != "gpt-5.5-pro" {
+		t.Fatalf("model override = %+v, want openai/gpt-5.5-pro", gotModel)
+	}
+}
+
+func TestPromptOmitsModelWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	hasModelKey := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/session/session-1/message" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var raw map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		mu.Lock()
+		_, hasModelKey = raw["model"]
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"info":{"sessionID":"session-1"},"parts":[{"type":"text","text":"ok"},{"type":"step-finish","reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	client := New(server.URL)
+	client.httpClient = server.Client()
+	if _, err := client.Prompt(context.Background(), "/tmp/workspace", "session-1", "hello", nil, backend.PromptOptions{}); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if hasModelKey {
+		t.Fatal("expected no model key in request body when model is unset")
+	}
+}
+
 func TestPromptStopsAfterAbort(t *testing.T) {
 	t.Parallel()
 

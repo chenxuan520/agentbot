@@ -301,10 +301,26 @@ data/chats/<provider>/<conversation-id>/.session-setting.json
 }
 ```
 
-也就是说：
+### 选择会话使用的模型
 
-- 平台支持“每个 session 一份不同的 `opencode` patch”
-- 真正的 provider/model schema 仍然跟 `opencode` 自己的配置格式走
+`.session-setting.json` 里的 `agent.model`（格式 `"providerID/modelID"`，留空=跟随后端默认）决定该会话用哪个模型：
+
+```json
+{
+  "agent": {
+    "backend": "opencode",
+    "model": "openai/gpt-5.5-pro"
+  }
+}
+```
+
+web 控制台 Settings 里有 **Model 下拉框**：从 `opencode` 的 `/config/providers`（已连接的 provider 与模型）拉取可选项，写入 `agent.model`，保存后**对下一条消息即生效**（包括当前活跃 session，不丢上下文）。`/info` 会显示将要使用的 `model`。
+
+实现说明：
+
+- `agent.model` 是**按条消息**通过 `opencode` 的 message 接口 `model:{providerID,modelID}` 下发的，**不写进 workspace 的 `opencode.json`**。
+- 这是因为 `opencode serve` 可能被以环境变量（`OPENCODE_CONFIG_CONTENT`）的形式钉死了默认 `model`，此时 workspace `opencode.json` 里的 `model` 会被覆盖、不生效；按条消息下发是唯一可靠的覆盖方式。
+- `agent.opencodeConfig` 仍可写其它 `opencode` patch（会 merge 进 `opencode.json`），只是不建议再用它设 `model`。
 
 ## Workspace 结构
 

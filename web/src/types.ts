@@ -26,6 +26,7 @@ export interface SessionSettings {
   template: string
   agent: {
     backend: string
+    model?: string
     agentsMode?: SessionAgentsMode
     opencodeConfig?: Record<string, unknown>
     opencodeHTTPTimeoutSeconds?: number
@@ -106,6 +107,24 @@ export interface SessionTranscriptResponse {
   contextInputTokens?: number
   availableSessions: SessionTranscriptSessionOption[]
   messages: SessionTranscriptMessage[]
+}
+
+export interface SessionModelOption {
+  id: string
+  name: string
+  contextLimit: number
+}
+
+export interface SessionModelProvider {
+  id: string
+  name: string
+  default: string
+  models: SessionModelOption[]
+}
+
+export interface SessionModelsResponse {
+  current: string
+  providers: SessionModelProvider[]
 }
 
 export interface WorkspaceFileItem {

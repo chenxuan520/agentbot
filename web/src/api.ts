@@ -15,6 +15,7 @@ import type {
   SessionDetail,
   SessionRef,
   SessionSettings,
+  SessionModelsResponse,
   SessionSummary,
   SessionTranscriptResponse,
   SkillSummary,
@@ -68,6 +69,10 @@ export class ApiClient {
     }
     const suffix = query.toString() ? `?${query.toString()}` : ''
     return this.request(`/api/v1/admin/sessions/${encodeURIComponent(ref.provider)}/${encodeURIComponent(ref.conversationId)}/transcript${suffix}`)
+  }
+
+  async getSessionModels(ref: SessionRef): Promise<SessionModelsResponse> {
+    return this.request(`/api/v1/admin/sessions/${encodeURIComponent(ref.provider)}/${encodeURIComponent(ref.conversationId)}/models`)
   }
 
   async getSessionAgents(ref: SessionRef): Promise<SessionAgentsFile> {

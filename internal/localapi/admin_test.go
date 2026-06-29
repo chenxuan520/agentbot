@@ -49,6 +49,26 @@ func (f fakeAdminTranscriptBackend) GetSessionMessages(_ context.Context, sessio
 	return append([]backend.SessionMessage(nil), f.messages...), nil
 }
 
+type fakeAdminModelsBackend struct {
+	catalog backend.ModelCatalog
+}
+
+func (f fakeAdminModelsBackend) Name() string                   { return "fake-models" }
+func (f fakeAdminModelsBackend) Health(_ context.Context) error { return nil }
+func (f fakeAdminModelsBackend) CreateSession(context.Context, string) (string, error) {
+	return "", nil
+}
+func (f fakeAdminModelsBackend) AbortSession(context.Context, string) error { return nil }
+func (f fakeAdminModelsBackend) Prompt(context.Context, string, string, string, []backend.Attachment, backend.PromptOptions) (backend.PromptResult, error) {
+	return backend.PromptResult{}, nil
+}
+func (f fakeAdminModelsBackend) ListModels(context.Context, string) (backend.ModelCatalog, error) {
+	return f.catalog, nil
+}
+func (f fakeAdminModelsBackend) CurrentModel(context.Context, string) (string, error) {
+	return f.catalog.Current, nil
+}
+
 func (f fakeAdminDisplayProvider) Name() string                 { return "fake-provider" }
 func (f fakeAdminDisplayProvider) Health(context.Context) error { return nil }
 func (f fakeAdminDisplayProvider) AddHandlingReaction(context.Context, string) (string, error) {
@@ -314,6 +334,68 @@ func TestAdminSessionTranscriptSupportsSnapshotAndIncrementalPolling(t *testing.
 	}
 	if len(incrementalBody.Messages) != 2 || incrementalBody.Messages[0].ID != "msg-2" || incrementalBody.Messages[1].ID != "msg-3" {
 		t.Fatalf("unexpected incremental messages: %+v", incrementalBody.Messages)
+	}
+}
+
+func TestAdminSessionModelsListsCatalog(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTemplate(t, root)
+
+	cfg := config.Default(root)
+	cfg.ProjectToken = "project-token"
+	cfg.AuthSecret = "auth-secret"
+	store, err := storesqlite.Open(cfg.DBPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	manager := workspace.NewManager(cfg, store)
+	sessions := session.NewService(store, manager)
+	access := accesstoken.NewService(store, cfg.ProjectToken, cfg.AuthSecret)
+	server := New(cfg, nil, nil, sessions, nil, access)
+	server.backends = func(config.Config, workspace.Settings) (backend.Client, error) {
+		return fakeAdminModelsBackend{catalog: backend.ModelCatalog{
+			Current: "openai/gpt-5.4",
+			Providers: []backend.ModelProvider{{
+				ID:      "openai",
+				Name:    "OpenAI",
+				Default: "gpt-5.5",
+				Models: []backend.ModelInfo{
+					{ID: "gpt-5.4", Name: "GPT-5.4", ContextLimit: 1050000},
+					{ID: "gpt-5.5", Name: "GPT-5.5", ContextLimit: 400000},
+				},
+			}},
+		}}, nil
+	}
+	router := server.router()
+
+	ref := conversation.Ref{Provider: "feishu", ConversationID: "chat-a"}
+	if _, err := sessions.Current(ref); err != nil {
+		t.Fatalf("prepare session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/sessions/feishu/chat-a/models", nil)
+	req.Header.Set("Authorization", "Bearer "+cfg.ProjectToken)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", resp.Code, resp.Body.String())
+	}
+	var body adminModelsResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode models: %v", err)
+	}
+	if body.Current != "openai/gpt-5.4" {
+		t.Fatalf("current = %q, want openai/gpt-5.4", body.Current)
+	}
+	if len(body.Providers) != 1 || body.Providers[0].ID != "openai" || body.Providers[0].Default != "gpt-5.5" {
+		t.Fatalf("unexpected providers: %+v", body.Providers)
+	}
+	if len(body.Providers[0].Models) != 2 || body.Providers[0].Models[0].ID != "gpt-5.4" || body.Providers[0].Models[0].ContextLimit != 1050000 {
+		t.Fatalf("unexpected models: %+v", body.Providers[0].Models)
 	}
 }
 
