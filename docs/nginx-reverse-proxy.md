@@ -2,6 +2,9 @@
 
 记录当前 `agent-bot` 的 nginx 反向代理方式，避免下次重装/迁移时忘记把 local-agent 的 WebSocket 路由配通。
 
+这个文档对应的是前端仍由 Vite dev server（默认 `4173`）提供的场景。
+如果你使用 GitHub Release 里的预编译包和 `web/dist/` 静态文件，请改看 `docs/release-deployment.md`。
+
 ## 目标
 
 - 域名：`agent-bot.example.com`

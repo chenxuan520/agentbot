@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check gofmt
+        run: |
+          files="$(git ls-files '*.go')"
+          if [ -z "$files" ]; then
+            exit 0
+          fi
+
+          unformatted="$(gofmt -l $files)"
+          if [ -n "$unformatted" ]; then
+            printf 'These files are not gofmt-formatted:\n%s\n' "$unformatted"
+            exit 1
+          fi
+
+      - name: Run Go tests
+        run: go test ./...
+
+  web:
+    name: Web Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Build web
+        run: npm run build

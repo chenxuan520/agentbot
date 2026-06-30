@@ -496,6 +496,7 @@ go run ./cmd/agent-bot schedule create feishu demo-chat 2026-05-06T10:00:00+08:0
 
 ## 更详细的文档
 
+- `docs/release-deployment.md`：GitHub Release 预编译包的部署方式，包含 `web/dist` 和 `/api/` 反代示例
 - `docs/architecture.md`：整体架构与主链路
 - `docs/configuration.md`：配置模型与 workspace 约定
 - `docs/scheduler.md`：scheduler 的存储与触发语义
@@ -518,6 +519,37 @@ cd web
 npm install
 npm run build
 ```
+
+## Release 发布
+
+推送 `v*` tag 时，GitHub Actions 会自动创建 GitHub Release，并上传按系统/架构拆分的预编译包。
+
+当前 release 包包含：
+
+- `agent-bot` 预编译二进制
+- `web/dist/`
+- `templates/`
+- `agents/`（含 `skills/`、`subagents/`、占位目录）
+- `scripts/`（预编译包可直接使用的辅助脚本子集）
+- `docs/`
+- `agent-bot.example.json`
+
+当前 release 目标：
+
+- `linux/amd64`
+- `linux/arm64`
+- `darwin/amd64`
+- `darwin/arm64`
+- `windows/amd64`
+
+触发示例：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+release 包部署方式见 `docs/release-deployment.md`。
 
 ## 设计原则
 
