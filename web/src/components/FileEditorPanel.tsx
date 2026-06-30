@@ -271,9 +271,9 @@ export function FileEditorPanel({ api, sessionRef, kind }: FileEditorPanelProps)
   return (
     <div className="file-editor-shell">
       <div className="file-list-panel">
-        <div className="tree-panel-toolbar">
-          <div className="panel-title">{kind === 'memory' ? 'Memory 目录树' : 'Hooks 目录树'}</div>
-          <div className="inline-actions tree-panel-actions">
+        <div className="tree-panel-toolbar tree-panel-toolbar-split">
+          <div className="tree-panel-toolbar-head">
+            <div className="panel-title">{kind === 'memory' ? 'Memory 目录树' : 'Hooks 目录树'}</div>
             <label className="tree-toolbar-toggle" title="显示隐藏文件">
               <span className="muted small">隐藏文件</span>
               <span className={showHiddenFiles ? 'toggle-switch compact active' : 'toggle-switch compact'}>
@@ -281,13 +281,15 @@ export function FileEditorPanel({ api, sessionRef, kind }: FileEditorPanelProps)
                 <span className="toggle-knob" />
               </span>
             </label>
+          </div>
+          <span className="tree-action-buttons">
             <button type="button" className="tree-action-button" onClick={expandAll} disabled={tree.children.length === 0}>
               全部展开
             </button>
             <button type="button" className="tree-action-button" onClick={collapseAll} disabled={expandedDirectories.length === 0}>
               全部折叠
             </button>
-          </div>
+          </span>
         </div>
         <div className="file-list">
           {visibleFiles.length ? (

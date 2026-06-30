@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { ApiClient } from '../api'
+import { showSuccessToast } from '../toast'
 import type { ObservabilityEvent, ObservabilityHealthItem, ObservabilitySnapshot } from '../types'
+import { ConfirmDialog } from './ConfirmDialog'
 
 interface ObservabilityPageProps {
   api: ApiClient
@@ -65,6 +67,8 @@ export function ObservabilityPage({ api }: ObservabilityPageProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [clearing, setClearing] = useState(false)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -76,6 +80,21 @@ export function ObservabilityPage({ api }: ObservabilityPageProps) {
       setError(nextError instanceof Error ? nextError.message : '读取诊断信息失败')
     } finally {
       setLoading(false)
+    }
+  }, [api])
+
+  const handleClear = useCallback(async () => {
+    setClearing(true)
+    try {
+      const result = await api.clearObservability()
+      setSnapshot(result)
+      setError('')
+      showSuccessToast('已清除失败计数与事件')
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : '清除事件失败')
+    } finally {
+      setClearing(false)
+      setShowClearConfirm(false)
     }
   }, [api])
 
@@ -103,6 +122,7 @@ export function ObservabilityPage({ api }: ObservabilityPageProps) {
   }, [snapshot])
 
   const events: ObservabilityEvent[] = snapshot?.events ?? []
+  const hasRecords = counters.length > 0 || events.length > 0
 
   return (
     <div className="obs-layout">
@@ -119,6 +139,14 @@ export function ObservabilityPage({ api }: ObservabilityPageProps) {
           </label>
           <button type="button" className="toolbar-button subtle" onClick={() => void load()} disabled={loading}>
             {loading ? '刷新中...' : '刷新'}
+          </button>
+          <button
+            type="button"
+            className="toolbar-button subtle danger"
+            onClick={() => setShowClearConfirm(true)}
+            disabled={clearing || !hasRecords}
+          >
+            {clearing ? '清除中...' : '清除事件'}
           </button>
         </div>
       </div>
@@ -197,6 +225,16 @@ export function ObservabilityPage({ api }: ObservabilityPageProps) {
       ) : (
         <div className="empty-state large">暂无诊断数据。</div>
       )}
+
+      <ConfirmDialog
+        open={showClearConfirm}
+        title="清除事件"
+        description="确认清除所有失败计数与最近事件吗？该操作不可恢复，daemon 运行时长不受影响。"
+        confirmLabel="确认清除"
+        loading={clearing}
+        onCancel={() => setShowClearConfirm(false)}
+        onConfirm={() => void handleClear()}
+      />
     </div>
   )
 }

@@ -127,6 +127,18 @@ func (r *Recorder) Snapshot() Snapshot {
 	}
 }
 
+// Reset drops all recorded events and counters. The start time is preserved so
+// that daemon uptime keeps reflecting the original process start.
+func (r *Recorder) Reset() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = r.events[:0]
+	r.counters = map[string]int64{}
+}
+
 // Default is the process-wide recorder used by the package-level helpers.
 var Default = NewRecorder(500)
 
@@ -137,3 +149,5 @@ func RecordError(category, provider, conversationID, summary string, err error) 
 }
 
 func SnapshotDefault() Snapshot { return Default.Snapshot() }
+
+func ResetDefault() { Default.Reset() }

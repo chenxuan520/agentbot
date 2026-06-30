@@ -18,8 +18,21 @@ func (s *Server) handleAdminObservability(c *gin.Context) {
 	if !requireProjectAdminScope(c) {
 		return
 	}
-	snapshot := observability.Default.Snapshot()
-	c.JSON(http.StatusOK, gin.H{
+	c.JSON(http.StatusOK, s.observabilityResponse(c, observability.Default.Snapshot()))
+}
+
+// handleAdminObservabilityClear drops all recorded failures and counters, then
+// returns the fresh snapshot (uptime preserved). Project-scoped like the read.
+func (s *Server) handleAdminObservabilityClear(c *gin.Context) {
+	if !requireProjectAdminScope(c) {
+		return
+	}
+	observability.Default.Reset()
+	c.JSON(http.StatusOK, s.observabilityResponse(c, observability.Default.Snapshot()))
+}
+
+func (s *Server) observabilityResponse(c *gin.Context, snapshot observability.Snapshot) gin.H {
+	return gin.H{
 		"startedAt": snapshot.StartedAt,
 		"now":       snapshot.Now,
 		"counters":  snapshot.Counters,
@@ -28,7 +41,7 @@ func (s *Server) handleAdminObservability(c *gin.Context) {
 			"backend":  s.backendHealth(c.Request.Context()),
 			"provider": s.providerHealth(c.Request.Context()),
 		},
-	})
+	}
 }
 
 func (s *Server) backendHealth(ctx context.Context) gin.H {

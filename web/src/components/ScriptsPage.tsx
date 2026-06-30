@@ -313,12 +313,14 @@ export function ScriptsPage({ api }: ScriptsPageProps) {
               <div className="muted small">支持编辑和保存 `.py` / `.sh` 等脚本文件。</div>
             </div>
             <div className="inline-actions tree-panel-actions">
-              <button type="button" className="tree-action-button" onClick={expandAll} disabled={tree.children.length === 0}>
-                全部展开
-              </button>
-              <button type="button" className="tree-action-button" onClick={collapseAll} disabled={expandedDirectories.length === 0}>
-                全部折叠
-              </button>
+              <span className="tree-action-buttons">
+                <button type="button" className="tree-action-button" onClick={expandAll} disabled={tree.children.length === 0}>
+                  全部展开
+                </button>
+                <button type="button" className="tree-action-button" onClick={collapseAll} disabled={expandedDirectories.length === 0}>
+                  全部折叠
+                </button>
+              </span>
             </div>
           </div>
           <input value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="搜索文件名或路径" />

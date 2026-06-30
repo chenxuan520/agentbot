@@ -714,6 +714,16 @@ p {
   box-shadow: none;
 }
 
+.toolbar-button.danger {
+  border-color: rgba(237, 94, 117, 0.32);
+  color: #ffd9e0;
+}
+
+.toolbar-button.danger:hover {
+  background: rgba(101, 23, 35, 0.4);
+  border-color: rgba(255, 124, 145, 0.5);
+}
+
 .danger-button {
   border-color: rgba(237, 94, 117, 0.42);
   background: linear-gradient(180deg, rgba(101, 23, 35, 0.94), rgba(72, 14, 28, 0.92));
@@ -864,6 +874,10 @@ p {
 
 .transcript-toolbar-actions {
   flex-wrap: wrap;
+}
+
+.skills-header-actions {
+  justify-content: flex-end;
 }
 
 .transcript-meta-grid {
@@ -1540,12 +1554,36 @@ p {
   flex-wrap: wrap;
 }
 
+.tree-panel-toolbar-split {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.6rem;
+}
+
+.tree-panel-toolbar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.tree-panel-toolbar-head .panel-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tree-panel-toolbar-split .tree-action-buttons {
+  align-self: flex-end;
+}
+
 .tree-panel-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 0.45rem;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 
 .tree-toolbar-toggle {
@@ -1555,10 +1593,18 @@ p {
   white-space: nowrap;
 }
 
+.tree-action-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: nowrap;
+}
+
 .tree-action-button {
   padding: 0.45rem 0.7rem;
   border-radius: 10px;
   font-size: 0.84rem;
+  white-space: nowrap;
 }
 
 .toggle-switch.compact {
@@ -2553,8 +2599,8 @@ html {
 }
 
 .obs-counter-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-top: 12px;
 }
@@ -2563,7 +2609,8 @@ html {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 12px 14px;
+  min-width: 160px;
+  padding: 12px 16px;
   border-radius: 12px;
   border: 1px solid rgba(123, 145, 208, 0.16);
   background: rgba(10, 18, 36, 0.58);

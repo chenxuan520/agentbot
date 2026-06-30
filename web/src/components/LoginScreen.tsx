@@ -202,7 +202,15 @@ export function LoginScreen({ error, loading, onSubmit }: LoginScreenProps) {
                 <textarea
                   value={token}
                   onChange={(event) => setToken(event.target.value)}
-                  placeholder="粘贴 project token 或 session token"
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                      event.preventDefault()
+                      if (!loading && token.trim() !== '') {
+                        onSubmit(token)
+                      }
+                    }
+                  }}
+                  placeholder="粘贴 project token 或 session token（回车登录，Shift+Enter 换行）"
                   rows={4}
                   autoFocus
                 />

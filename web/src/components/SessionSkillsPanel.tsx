@@ -509,12 +509,14 @@ export function SessionSkillsPanel({ api, sessionRef }: SessionSkillsPanelProps)
                   <div className="tree-panel-toolbar">
                     <div className="panel-title">文件树</div>
                     <div className="inline-actions tree-panel-actions">
-                      <button type="button" className="tree-action-button" onClick={expandAll} disabled={tree.children.length === 0}>
-                        全部展开
-                      </button>
-                      <button type="button" className="tree-action-button" onClick={collapseAll} disabled={expandedDirectories.length === 0}>
-                        全部折叠
-                      </button>
+                      <span className="tree-action-buttons">
+                        <button type="button" className="tree-action-button" onClick={expandAll} disabled={tree.children.length === 0}>
+                          全部展开
+                        </button>
+                        <button type="button" className="tree-action-button" onClick={collapseAll} disabled={expandedDirectories.length === 0}>
+                          全部折叠
+                        </button>
+                      </span>
                     </div>
                   </div>
                   <input value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="搜索文件名或路径" />

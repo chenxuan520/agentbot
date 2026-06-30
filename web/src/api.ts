@@ -38,6 +38,10 @@ export class ApiClient {
     return this.request('/api/v1/admin/observability')
   }
 
+  async clearObservability(): Promise<ObservabilitySnapshot> {
+    return this.request('/api/v1/admin/observability', { method: 'DELETE' })
+  }
+
   async listSessions(): Promise<SessionSummary[]> {
     const response = await this.request<{ items: SessionSummary[] }>('/api/v1/admin/sessions')
     return response.items

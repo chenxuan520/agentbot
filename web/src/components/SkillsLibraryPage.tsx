@@ -448,7 +448,7 @@ export function SkillsLibraryPage({ api, canManage = true }: SkillsLibraryPagePr
             <h2>公共 Skill 仓库</h2>
             <p className="muted small">浏览和编辑 `agents/skills/` 下的公共 skill 仓库。</p>
           </div>
-          <div className="inline-actions">
+          <div className="inline-actions skills-header-actions">
             <button type="button" className="toolbar-button subtle" onClick={() => void loadSkills()} disabled={loading}>
               {loading ? '刷新中...' : '刷新'}
             </button>
@@ -546,9 +546,9 @@ export function SkillsLibraryPage({ api, canManage = true }: SkillsLibraryPagePr
               <div className="file-editor-shell">
                   <div className="file-list-panel">
                     <div className="skill-files-toolbar">
-                      <div className="tree-panel-toolbar">
-                        <div className="panel-title">文件树</div>
-                        <div className="inline-actions tree-panel-actions">
+                      <div className="tree-panel-toolbar tree-panel-toolbar-split">
+                        <div className="tree-panel-toolbar-head">
+                          <div className="panel-title">文件树</div>
                           <label className="tree-toolbar-toggle" title="显示隐藏文件">
                             <span className="muted small">隐藏文件</span>
                             <span className={showHiddenFiles ? 'toggle-switch compact active' : 'toggle-switch compact'}>
@@ -556,13 +556,15 @@ export function SkillsLibraryPage({ api, canManage = true }: SkillsLibraryPagePr
                               <span className="toggle-knob" />
                             </span>
                           </label>
+                        </div>
+                        <span className="tree-action-buttons">
                           <button type="button" className="tree-action-button" onClick={expandAll} disabled={tree.children.length === 0}>
                             全部展开
                           </button>
                           <button type="button" className="tree-action-button" onClick={collapseAll} disabled={expandedDirectories.length === 0}>
                             全部折叠
                           </button>
-                        </div>
+                        </span>
                       </div>
                       <input value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="搜索文件名或路径" />
                     </div>

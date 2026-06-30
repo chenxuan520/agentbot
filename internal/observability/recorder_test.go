@@ -52,8 +52,31 @@ func TestRecorderNilSafe(t *testing.T) {
 
 	var rec *Recorder
 	rec.Record(Event{Summary: "noop"}) // must not panic
+	rec.Reset()                        // must not panic
 	snap := rec.Snapshot()
 	if len(snap.Events) != 0 {
 		t.Fatalf("nil recorder events = %d, want 0", len(snap.Events))
+	}
+}
+
+func TestRecorderResetClearsEventsAndCounters(t *testing.T) {
+	t.Parallel()
+
+	rec := NewRecorder(10)
+	started := rec.startedAt
+	rec.RecordError("scheduler", "feishu", "chat-1", "job failed", errors.New("boom"))
+	rec.Record(Event{Severity: SeverityWarn, Category: "scheduler", Summary: "recovered"})
+
+	rec.Reset()
+
+	snap := rec.Snapshot()
+	if len(snap.Events) != 0 {
+		t.Fatalf("events after reset = %d, want 0", len(snap.Events))
+	}
+	if len(snap.Counters) != 0 {
+		t.Fatalf("counters after reset = %+v, want empty", snap.Counters)
+	}
+	if !snap.StartedAt.Equal(started) {
+		t.Fatalf("startedAt = %v, want preserved %v", snap.StartedAt, started)
 	}
 }
