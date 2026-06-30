@@ -35,13 +35,13 @@ func (h *FileHandler) Handle(job Job, triggeredAt time.Time) error {
 	}
 
 	entry := map[string]any{
-		"jobID":         job.ID,
-		"provider":      job.Provider,
+		"jobID":          job.ID,
+		"provider":       job.Provider,
 		"conversationID": job.ConversationID,
-		"route":         job.Route,
-		"payload":       json.RawMessage(job.Payload),
-		"runAt":         job.RunAt.UTC().Format(time.RFC3339),
-		"triggeredAt":   triggeredAt.UTC().Format(time.RFC3339),
+		"route":          job.Route,
+		"payload":        json.RawMessage(job.Payload),
+		"runAt":          job.RunAt.UTC().Format(time.RFC3339),
+		"triggeredAt":    triggeredAt.UTC().Format(time.RFC3339),
 	}
 
 	data, err := json.Marshal(entry)

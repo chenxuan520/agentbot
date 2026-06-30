@@ -50,11 +50,11 @@ type RuntimeConfig struct {
 	ReplyMode                              string `json:"replyMode"`
 	HistoryTTLHours                        int    `json:"historyTTLHours"`
 	AcceptGroupHumanMessagesWithoutMention bool   `json:"acceptGroupHumanMessagesWithoutMention"`
-    // AcceptOtherBotMessages controls whether messages sent by other bots
-    // (provider senderType "app", excluding ourselves) are polled and replayed
-    // into the processing chain.
-    AcceptOtherBotMessages        bool `json:"acceptOtherBotMessages"`
-    AcceptInteractiveCardMessages bool `json:"acceptInteractiveCardMessages"`
+	// AcceptOtherBotMessages controls whether messages sent by other bots
+	// (provider senderType "app", excluding ourselves) are polled and replayed
+	// into the processing chain.
+	AcceptOtherBotMessages        bool `json:"acceptOtherBotMessages"`
+	AcceptInteractiveCardMessages bool `json:"acceptInteractiveCardMessages"`
 	// RemoteEnabled opts this conversation in to the remote-agent route: when a
 	// local agent plugin connects with this conversation's session token, inbound
 	// messages are relayed to it instead of the default backend. It is the safety
