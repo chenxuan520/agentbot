@@ -207,10 +207,23 @@ export class ApiClient {
     return this.request(`/api/v1/admin/skills/${encodeURIComponent(skillID)}/files/content?path=${encodeURIComponent(path)}`)
   }
 
+  async createSkillFile(skillID: string, path: string, content: string): Promise<void> {
+    await this.request(`/api/v1/admin/skills/${encodeURIComponent(skillID)}/files/content`, {
+      method: 'POST',
+      body: JSON.stringify({ path, content }),
+    })
+  }
+
   async updateSkillFileContent(skillID: string, path: string, content: string): Promise<void> {
     await this.request(`/api/v1/admin/skills/${encodeURIComponent(skillID)}/files/content`, {
       method: 'PUT',
       body: JSON.stringify({ path, content }),
+    })
+  }
+
+  async deleteSkillFile(skillID: string, path: string): Promise<void> {
+    await this.request(`/api/v1/admin/skills/${encodeURIComponent(skillID)}/files/content?path=${encodeURIComponent(path)}`, {
+      method: 'DELETE',
     })
   }
 
@@ -315,6 +328,16 @@ export class ApiClient {
     )
   }
 
+  async createSessionSkillFile(ref: SessionRef, skillID: string, path: string, content: string): Promise<void> {
+    await this.request(
+      `/api/v1/admin/sessions/${encodeURIComponent(ref.provider)}/${encodeURIComponent(ref.conversationId)}/session-skills/${encodeURIComponent(skillID)}/files/content`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ path, content }),
+      },
+    )
+  }
+
   async updateSessionSkillFileContent(ref: SessionRef, skillID: string, path: string, content: string): Promise<void> {
     await this.request(
       `/api/v1/admin/sessions/${encodeURIComponent(ref.provider)}/${encodeURIComponent(ref.conversationId)}/session-skills/${encodeURIComponent(skillID)}/files/content`,
@@ -322,6 +345,13 @@ export class ApiClient {
         method: 'PUT',
         body: JSON.stringify({ path, content }),
       },
+    )
+  }
+
+  async deleteSessionSkillFile(ref: SessionRef, skillID: string, path: string): Promise<void> {
+    await this.request(
+      `/api/v1/admin/sessions/${encodeURIComponent(ref.provider)}/${encodeURIComponent(ref.conversationId)}/session-skills/${encodeURIComponent(skillID)}/files/content?path=${encodeURIComponent(path)}`,
+      { method: 'DELETE' },
     )
   }
 

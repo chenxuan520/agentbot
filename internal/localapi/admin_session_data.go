@@ -205,6 +205,25 @@ func (s *Server) handleAdminSessionSkillFileGet(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"path": path, "content": content, "exists": true, "readOnly": false})
 }
 
+func (s *Server) handleAdminSessionSkillFileCreate(c *gin.Context) {
+	_, workspacePath, ok := s.ensureAuthorizedSessionWorkspace(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if !bindJSON(c, &body) {
+		return
+	}
+	if err := createSkillFile(sessionSkillRootDir(workspacePath), strings.TrimSpace(c.Param("skillId")), body.Path, body.Content); err != nil {
+		writeSkillError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 func (s *Server) handleAdminSessionSkillFileUpdate(c *gin.Context) {
 	_, workspacePath, ok := s.ensureAuthorizedSessionWorkspace(c)
 	if !ok {
@@ -218,6 +237,18 @@ func (s *Server) handleAdminSessionSkillFileUpdate(c *gin.Context) {
 		return
 	}
 	if err := writeSkillFile(sessionSkillRootDir(workspacePath), strings.TrimSpace(c.Param("skillId")), body.Path, body.Content); err != nil {
+		writeSkillError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (s *Server) handleAdminSessionSkillFileDelete(c *gin.Context) {
+	_, workspacePath, ok := s.ensureAuthorizedSessionWorkspace(c)
+	if !ok {
+		return
+	}
+	if err := deleteSkillFile(sessionSkillRootDir(workspacePath), strings.TrimSpace(c.Param("skillId")), strings.TrimSpace(c.Query("path"))); err != nil {
 		writeSkillError(c, err)
 		return
 	}

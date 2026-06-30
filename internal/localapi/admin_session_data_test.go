@@ -314,6 +314,120 @@ func TestSessionDataImportRejectsPrivateSkillThatConflictsWithPublicSkill(t *tes
 	}
 }
 
+func TestSessionSkillFileDelete(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTemplate(t, root)
+
+	cfg := config.Default(root)
+	cfg.ProjectToken = "project-token"
+	cfg.AuthSecret = "auth-secret"
+	store, err := storesqlite.Open(cfg.DBPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	manager := workspace.NewManager(cfg, store)
+	sessions := session.NewService(store, manager)
+	access := accesstoken.NewService(store, cfg.ProjectToken, cfg.AuthSecret)
+	server := New(cfg, nil, nil, sessions, nil, access)
+	router := server.router()
+
+	ref := conversation.Ref{Provider: "feishu", ConversationID: "chat-session-skill-file"}
+	current, err := sessions.Current(ref)
+	if err != nil {
+		t.Fatalf("prepare session: %v", err)
+	}
+	token, err := access.EnsureSessionToken(ref)
+	if err != nil {
+		t.Fatalf("ensure session token: %v", err)
+	}
+
+	base := "/api/v1/admin/sessions/feishu/chat-session-skill-file/session-skills"
+
+	createReq := httptest.NewRequest(http.MethodPost, base, bytes.NewReader([]byte(`{"id":"local-skill","content":"# Local Skill\n"}`)))
+	createReq.Header.Set("Authorization", "Bearer "+token)
+	createReq.Header.Set("Content-Type", "application/json")
+	createResp := httptest.NewRecorder()
+	router.ServeHTTP(createResp, createReq)
+	if createResp.Code != http.StatusOK {
+		t.Fatalf("create session skill status = %d, body=%s", createResp.Code, createResp.Body.String())
+	}
+
+	addReq := httptest.NewRequest(http.MethodPost, base+"/local-skill/files/content", bytes.NewReader([]byte(`{"path":"bin/run.sh","content":"#!/usr/bin/env bash\n"}`)))
+	addReq.Header.Set("Authorization", "Bearer "+token)
+	addReq.Header.Set("Content-Type", "application/json")
+	addResp := httptest.NewRecorder()
+	router.ServeHTTP(addResp, addReq)
+	if addResp.Code != http.StatusOK {
+		t.Fatalf("add session skill file status = %d, body=%s", addResp.Code, addResp.Body.String())
+	}
+	skillDir := filepath.Join(current.Workspace.Path, ".agents", "session-skills", "local-skill")
+	if _, err := os.Stat(filepath.Join(skillDir, "bin", "run.sh")); err != nil {
+		t.Fatalf("expected session skill file created: %v", err)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, base+"/local-skill/files/content?path=bin/run.sh", nil)
+	deleteReq.Header.Set("Authorization", "Bearer "+token)
+	deleteResp := httptest.NewRecorder()
+	router.ServeHTTP(deleteResp, deleteReq)
+	if deleteResp.Code != http.StatusOK {
+		t.Fatalf("delete session skill file status = %d, body=%s", deleteResp.Code, deleteResp.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(skillDir, "bin", "run.sh")); !os.IsNotExist(err) {
+		t.Fatalf("expected session skill file removed, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(skillDir, "bin")); !os.IsNotExist(err) {
+		t.Fatalf("expected empty parent dir pruned, err=%v", err)
+	}
+
+	aliasReq := httptest.NewRequest(http.MethodPost, base+"/local-skill/files/content", bytes.NewReader([]byte(`{"path":"./SKILL.md","content":"overwritten\n"}`)))
+	aliasReq.Header.Set("Authorization", "Bearer "+token)
+	aliasReq.Header.Set("Content-Type", "application/json")
+	aliasResp := httptest.NewRecorder()
+	router.ServeHTTP(aliasResp, aliasReq)
+	if aliasResp.Code != http.StatusConflict {
+		t.Fatalf("create alias session skill file status = %d, body=%s", aliasResp.Code, aliasResp.Body.String())
+	}
+
+	protectedReq := httptest.NewRequest(http.MethodDelete, base+"/local-skill/files/content?path=SKILL.md", nil)
+	protectedReq.Header.Set("Authorization", "Bearer "+token)
+	protectedResp := httptest.NewRecorder()
+	router.ServeHTTP(protectedResp, protectedReq)
+	if protectedResp.Code != http.StatusBadRequest {
+		t.Fatalf("delete session SKILL.md status = %d, body=%s", protectedResp.Code, protectedResp.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
+		t.Fatalf("expected session SKILL.md preserved, err=%v", err)
+	}
+
+	skillInfo, err := os.Stat(filepath.Join(skillDir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("stat session skill entry file: %v", err)
+	}
+	expectedLowercaseStatus := http.StatusNotFound
+	if aliasInfo, err := os.Stat(filepath.Join(skillDir, "skill.md")); err == nil {
+		if os.SameFile(aliasInfo, skillInfo) {
+			expectedLowercaseStatus = http.StatusBadRequest
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat session lowercase alias path: %v", err)
+	}
+
+	protectedCaseReq := httptest.NewRequest(http.MethodDelete, base+"/local-skill/files/content?path=skill.md", nil)
+	protectedCaseReq.Header.Set("Authorization", "Bearer "+token)
+	protectedCaseResp := httptest.NewRecorder()
+	router.ServeHTTP(protectedCaseResp, protectedCaseReq)
+	if protectedCaseResp.Code != expectedLowercaseStatus {
+		t.Fatalf("delete lowercase session skill.md status = %d, want %d, body=%s", protectedCaseResp.Code, expectedLowercaseStatus, protectedCaseResp.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
+		t.Fatalf("expected session SKILL.md preserved after lowercase delete, err=%v", err)
+	}
+}
+
 func buildSkillZip(skillID string, files map[string]string) ([]byte, error) {
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)

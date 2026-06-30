@@ -1096,6 +1096,145 @@ func TestAdminProjectTokenManagesSkills(t *testing.T) {
 	}
 }
 
+func TestAdminSkillFileDelete(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTemplate(t, root)
+	writeSkill(t, root, "skill-a", "Skill A", map[string]string{
+		"SKILL.md":      "# Skill A\n",
+		"bin/script.sh": "#!/usr/bin/env bash\n",
+	})
+
+	cfg := config.Default(root)
+	cfg.ProjectToken = "project-token"
+	cfg.AuthSecret = "auth-secret"
+	store, err := storesqlite.Open(cfg.DBPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	manager := workspace.NewManager(cfg, store)
+	sessions := session.NewService(store, manager)
+	access := accesstoken.NewService(store, cfg.ProjectToken, cfg.AuthSecret)
+	server := New(cfg, nil, nil, sessions, nil, access)
+	router := server.router()
+
+	// Deleting an attached file succeeds and prunes the now-empty parent dir.
+	okReq := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/skills/skill-a/files/content?path=bin/script.sh", nil)
+	okReq.Header.Set("Authorization", "Bearer "+cfg.ProjectToken)
+	okResp := httptest.NewRecorder()
+	router.ServeHTTP(okResp, okReq)
+	if okResp.Code != http.StatusOK {
+		t.Fatalf("delete skill file status = %d, body=%s", okResp.Code, okResp.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "agents", "skills", "skill-a", "bin", "script.sh")); !os.IsNotExist(err) {
+		t.Fatalf("expected skill file removed, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "agents", "skills", "skill-a", "bin")); !os.IsNotExist(err) {
+		t.Fatalf("expected empty parent dir pruned, err=%v", err)
+	}
+
+	// SKILL.md is the entry file and cannot be deleted.
+	protectedReq := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/skills/skill-a/files/content?path=SKILL.md", nil)
+	protectedReq.Header.Set("Authorization", "Bearer "+cfg.ProjectToken)
+	protectedResp := httptest.NewRecorder()
+	router.ServeHTTP(protectedResp, protectedReq)
+	if protectedResp.Code != http.StatusBadRequest {
+		t.Fatalf("delete SKILL.md status = %d, body=%s", protectedResp.Code, protectedResp.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "agents", "skills", "skill-a", "SKILL.md")); err != nil {
+		t.Fatalf("expected SKILL.md preserved, err=%v", err)
+	}
+
+	skillInfo, err := os.Stat(filepath.Join(root, "agents", "skills", "skill-a", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("stat skill entry file: %v", err)
+	}
+	expectedLowercaseStatus := http.StatusNotFound
+	if aliasInfo, err := os.Stat(filepath.Join(root, "agents", "skills", "skill-a", "skill.md")); err == nil {
+		if os.SameFile(aliasInfo, skillInfo) {
+			expectedLowercaseStatus = http.StatusBadRequest
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat lowercase alias path: %v", err)
+	}
+
+	protectedCaseReq := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/skills/skill-a/files/content?path=skill.md", nil)
+	protectedCaseReq.Header.Set("Authorization", "Bearer "+cfg.ProjectToken)
+	protectedCaseResp := httptest.NewRecorder()
+	router.ServeHTTP(protectedCaseResp, protectedCaseReq)
+	if protectedCaseResp.Code != expectedLowercaseStatus {
+		t.Fatalf("delete lowercase skill.md status = %d, want %d, body=%s", protectedCaseResp.Code, expectedLowercaseStatus, protectedCaseResp.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "agents", "skills", "skill-a", "SKILL.md")); err != nil {
+		t.Fatalf("expected SKILL.md preserved after lowercase delete, err=%v", err)
+	}
+
+	// Path traversal is rejected.
+	escapeReq := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/skills/skill-a/files/content?path=../skill-a/SKILL.md", nil)
+	escapeReq.Header.Set("Authorization", "Bearer "+cfg.ProjectToken)
+	escapeResp := httptest.NewRecorder()
+	router.ServeHTTP(escapeResp, escapeReq)
+	if escapeResp.Code != http.StatusBadRequest {
+		t.Fatalf("delete escaping path status = %d, body=%s", escapeResp.Code, escapeResp.Body.String())
+	}
+}
+
+func TestAdminSkillFileCreateRejectsExistingAliases(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTemplate(t, root)
+	writeSkill(t, root, "skill-a", "Skill A", map[string]string{
+		"SKILL.md": "# Skill A\n",
+	})
+
+	cfg := config.Default(root)
+	cfg.ProjectToken = "project-token"
+	cfg.AuthSecret = "auth-secret"
+	store, err := storesqlite.Open(cfg.DBPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	manager := workspace.NewManager(cfg, store)
+	sessions := session.NewService(store, manager)
+	access := accesstoken.NewService(store, cfg.ProjectToken, cfg.AuthSecret)
+	server := New(cfg, nil, nil, sessions, nil, access)
+	router := server.router()
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/skills/skill-a/files/content", strings.NewReader(`{"path":"bin/script.sh","content":"#!/usr/bin/env bash\n"}`))
+	createReq.Header.Set("Authorization", "Bearer "+cfg.ProjectToken)
+	createReq.Header.Set("Content-Type", "application/json")
+	createResp := httptest.NewRecorder()
+	router.ServeHTTP(createResp, createReq)
+	if createResp.Code != http.StatusOK {
+		t.Fatalf("create skill file status = %d, body=%s", createResp.Code, createResp.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "agents", "skills", "skill-a", "bin", "script.sh")); err != nil {
+		t.Fatalf("expected created skill file: %v", err)
+	}
+
+	aliasReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/skills/skill-a/files/content", strings.NewReader(`{"path":"./SKILL.md","content":"overwritten\n"}`))
+	aliasReq.Header.Set("Authorization", "Bearer "+cfg.ProjectToken)
+	aliasReq.Header.Set("Content-Type", "application/json")
+	aliasResp := httptest.NewRecorder()
+	router.ServeHTTP(aliasResp, aliasReq)
+	if aliasResp.Code != http.StatusConflict {
+		t.Fatalf("create alias skill file status = %d, body=%s", aliasResp.Code, aliasResp.Body.String())
+	}
+	data, err := os.ReadFile(filepath.Join(root, "agents", "skills", "skill-a", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read skill file after alias create: %v", err)
+	}
+	if string(data) != "# Skill A\n" {
+		t.Fatalf("skill file unexpectedly changed: %q", string(data))
+	}
+}
+
 func TestAdminProjectTokenCanCreateSkill(t *testing.T) {
 	t.Parallel()
 

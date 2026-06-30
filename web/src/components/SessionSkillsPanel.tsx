@@ -126,6 +126,24 @@ function pickDefaultSkillFilePath(files: WorkspaceFileItem[]): string {
   return files.find((item) => item.path === 'SKILL.md')?.path ?? files.find((item) => item.exists)?.path ?? files[0]?.path ?? ''
 }
 
+function normalizeRelativeFilePathInput(value: string): string | null {
+  const parts: string[] = []
+  for (const part of value.trim().split('/')) {
+    if (!part || part === '.') {
+      continue
+    }
+    if (part === '..') {
+      if (parts.length === 0) {
+        return null
+      }
+      parts.pop()
+      continue
+    }
+    parts.push(part)
+  }
+  return parts.length > 0 ? parts.join('/') : null
+}
+
 export function SessionSkillsPanel({ api, sessionRef }: SessionSkillsPanelProps) {
   const [items, setItems] = useState<SkillSummary[]>([])
   const [selectedSkillID, setSelectedSkillID] = useState('')
@@ -142,6 +160,10 @@ export function SessionSkillsPanel({ api, sessionRef }: SessionSkillsPanelProps)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [creatingFile, setCreatingFile] = useState(false)
+  const [deletingFile, setDeletingFile] = useState(false)
+  const [newFilePath, setNewFilePath] = useState('')
+  const [showDeleteFileConfirm, setShowDeleteFileConfirm] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [message, setMessage] = useState('')
@@ -226,6 +248,7 @@ export function SessionSkillsPanel({ api, sessionRef }: SessionSkillsPanelProps)
       setSelectedPath('')
       setExpandedDirectories([])
       setFileQuery('')
+      setNewFilePath('')
       setContent('')
       setDirty(false)
       return
@@ -245,6 +268,7 @@ export function SessionSkillsPanel({ api, sessionRef }: SessionSkillsPanelProps)
         setFiles(nextFiles)
         setExpandedDirectories([])
         setFileQuery('')
+        setNewFilePath('')
         setSelectedPath((current) => {
           if (current && nextFiles.some((item) => item.path === current)) {
             return current
@@ -363,6 +387,69 @@ export function SessionSkillsPanel({ api, sessionRef }: SessionSkillsPanelProps)
   async function handleDeleteConfirm() {
     await handleDeleteSkill()
     setShowDeleteConfirm(false)
+  }
+
+  async function handleCreateFile() {
+    if (!detail) {
+      return
+    }
+    const rawPath = newFilePath.trim()
+    if (!rawPath) {
+      setMessage('请输入新文件的相对路径。')
+      return
+    }
+    if (rawPath.startsWith('/')) {
+      setMessage('请使用相对路径，例如 scripts/run.sh。')
+      return
+    }
+    const path = normalizeRelativeFilePathInput(rawPath)
+    if (!path) {
+      setMessage('请输入合法的相对文件路径，例如 scripts/run.sh。')
+      return
+    }
+    if (files.some((item) => item.path === path)) {
+      setMessage(`文件 ${path} 已存在。`)
+      return
+    }
+    setCreatingFile(true)
+    setMessage('')
+    try {
+      await api.createSessionSkillFile(sessionRef, detail.id, path, '')
+      const nextFiles = await api.listSessionSkillFiles(sessionRef, detail.id)
+      setFiles(nextFiles)
+      setSelectedPath(path)
+      setNewFilePath('')
+      showSuccessToast(`已创建 ${path}`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '新建文件失败')
+    } finally {
+      setCreatingFile(false)
+    }
+  }
+
+  async function handleDeleteFile() {
+    if (!detail || !selectedPath || selectedPath === 'SKILL.md') {
+      return
+    }
+    setDeletingFile(true)
+    setMessage('')
+    try {
+      const removed = selectedPath
+      await api.deleteSessionSkillFile(sessionRef, detail.id, removed)
+      const nextFiles = await api.listSessionSkillFiles(sessionRef, detail.id)
+      setFiles(nextFiles)
+      setSelectedPath(pickDefaultSkillFilePath(nextFiles))
+      showSuccessToast(`已删除 ${removed}`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '删除文件失败')
+    } finally {
+      setDeletingFile(false)
+    }
+  }
+
+  async function handleDeleteFileConfirm() {
+    await handleDeleteFile()
+    setShowDeleteFileConfirm(false)
   }
 
   function toggleDirectory(path: string) {
@@ -520,6 +607,27 @@ export function SessionSkillsPanel({ api, sessionRef }: SessionSkillsPanelProps)
                     </div>
                   </div>
                   <input value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="搜索文件名或路径" />
+                  <div className="skill-newfile-row">
+                    <input
+                      value={newFilePath}
+                      onChange={(event) => setNewFilePath(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          void handleCreateFile()
+                        }
+                      }}
+                      placeholder="新建文件，如 scripts/run.sh"
+                    />
+                    <button
+                      type="button"
+                      className="toolbar-button subtle"
+                      onClick={() => void handleCreateFile()}
+                      disabled={creatingFile || !newFilePath.trim()}
+                    >
+                      {creatingFile ? '创建中...' : '新建文件'}
+                    </button>
+                  </div>
                 </div>
                 <div className="file-list">
                   {filteredTree && files.length > 0 ? (
@@ -551,9 +659,21 @@ export function SessionSkillsPanel({ api, sessionRef }: SessionSkillsPanelProps)
                     <div className="panel-title">{selectedPath || '未选择文件'}</div>
                     {dirty ? <div className="muted small">有未保存改动</div> : null}
                   </div>
-                  <button type="button" onClick={() => void handleSave()} disabled={!selectedPath || saving || !dirty}>
-                    {saving ? '保存中...' : '保存'}
-                  </button>
+                  <div className="inline-actions">
+                    {selectedPath && selectedPath !== 'SKILL.md' ? (
+                      <button
+                        type="button"
+                        className="danger-button"
+                        onClick={() => setShowDeleteFileConfirm(true)}
+                        disabled={deletingFile}
+                      >
+                        {deletingFile ? '删除中...' : '删除文件'}
+                      </button>
+                    ) : null}
+                    <button type="button" onClick={() => void handleSave()} disabled={!selectedPath || saving || !dirty}>
+                      {saving ? '保存中...' : '保存'}
+                    </button>
+                  </div>
                 </div>
 
                 {selectedPath ? (
@@ -596,6 +716,15 @@ export function SessionSkillsPanel({ api, sessionRef }: SessionSkillsPanelProps)
         loading={deleting}
         onCancel={() => setShowDeleteConfirm(false)}
         onConfirm={() => void handleDeleteConfirm()}
+      />
+      <ConfirmDialog
+        open={showDeleteFileConfirm && !!detail && !!selectedPath}
+        title="删除文件"
+        description={selectedPath ? `确认删除文件 \`${selectedPath}\` 吗？` : ''}
+        confirmLabel="确认删除"
+        loading={deletingFile}
+        onCancel={() => setShowDeleteFileConfirm(false)}
+        onConfirm={() => void handleDeleteFileConfirm()}
       />
     </div>
   )

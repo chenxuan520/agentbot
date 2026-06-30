@@ -17,6 +17,7 @@ import (
 var ErrSkillNotFound = errors.New("skill not found")
 var ErrSkillInUse = errors.New("skill is in use")
 var ErrSkillAlreadyExists = errors.New("skill already exists")
+var ErrSkillFileProtected = errors.New("skill file is protected")
 
 func (s *Server) handleAdminSkillCreate(c *gin.Context) {
 	if !requireProjectAdminScope(c) {
@@ -79,6 +80,24 @@ func (s *Server) handleAdminSkillFileGet(c *gin.Context) {
 	})
 }
 
+func (s *Server) handleAdminSkillFileCreate(c *gin.Context) {
+	if !requireProjectAdminScope(c) {
+		return
+	}
+	var body struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if !bindJSON(c, &body) {
+		return
+	}
+	if err := createSkillFile(s.cfg.SkillRootDir, strings.TrimSpace(c.Param("skillId")), body.Path, body.Content); err != nil {
+		writeSkillError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 func (s *Server) handleAdminSkillFileUpdate(c *gin.Context) {
 	if !requireProjectAdminScope(c) {
 		return
@@ -91,6 +110,17 @@ func (s *Server) handleAdminSkillFileUpdate(c *gin.Context) {
 		return
 	}
 	if err := writeSkillFile(s.cfg.SkillRootDir, strings.TrimSpace(c.Param("skillId")), body.Path, body.Content); err != nil {
+		writeSkillError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (s *Server) handleAdminSkillFileDelete(c *gin.Context) {
+	if !requireProjectAdminScope(c) {
+		return
+	}
+	if err := deleteSkillFile(s.cfg.SkillRootDir, strings.TrimSpace(c.Param("skillId")), strings.TrimSpace(c.Query("path"))); err != nil {
 		writeSkillError(c, err)
 		return
 	}
@@ -244,12 +274,84 @@ func writeSkillFile(skillRoot, skillID, relPath, content string) error {
 	return os.WriteFile(resolved, []byte(content), 0o644)
 }
 
+func createSkillFile(skillRoot, skillID, relPath, content string) error {
+	resolved, err := resolveSkillFile(skillRoot, skillID, relPath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(resolved, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("skill file %q already exists: %w", relPath, ErrSkillAlreadyExists)
+		}
+		return err
+	}
+	if _, err := file.WriteString(content); err != nil {
+		_ = file.Close()
+		_ = os.Remove(resolved)
+		return err
+	}
+	return file.Close()
+}
+
 func deleteSkill(skillRoot, skillID string) error {
 	skillDir, _, err := resolveSkillDir(skillRoot, skillID)
 	if err != nil {
 		return err
 	}
 	return os.RemoveAll(skillDir)
+}
+
+func deleteSkillFile(skillRoot, skillID, relPath string) error {
+	skillDir, _, err := resolveSkillDir(skillRoot, skillID)
+	if err != nil {
+		return err
+	}
+	resolved, err := resolveSkillFile(skillRoot, skillID, relPath)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("skill file %q not found: %w", relPath, ErrSkillNotFound)
+		}
+		return err
+	}
+	skillInfo, err := os.Stat(filepath.Join(skillDir, "SKILL.md"))
+	if err == nil && os.SameFile(info, skillInfo) {
+		return fmt.Errorf("SKILL.md is the skill entry file and cannot be deleted: %w", ErrSkillFileProtected)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("path %q is a directory", relPath)
+	}
+	if err := os.Remove(resolved); err != nil {
+		return err
+	}
+	pruneEmptySkillDirs(skillDir, filepath.Dir(resolved))
+	return nil
+}
+
+// pruneEmptySkillDirs removes now-empty directories left behind by a file
+// delete, walking up from dir but never touching skillDir itself.
+func pruneEmptySkillDirs(skillDir, dir string) {
+	skillDir = filepath.Clean(skillDir)
+	dir = filepath.Clean(dir)
+	for dir != skillDir && strings.HasPrefix(dir, skillDir+string(filepath.Separator)) {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			return
+		}
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+		dir = filepath.Dir(dir)
+	}
 }
 
 func createSkill(skillRoot, skillID, content string) (gin.H, error) {
@@ -327,6 +429,8 @@ func writeSkillError(c *gin.Context, err error) {
 		writeStatusError(c, http.StatusNotFound, err)
 	case errors.Is(err, ErrSkillAlreadyExists), errors.Is(err, ErrSkillInUse):
 		writeStatusError(c, http.StatusConflict, err)
+	case errors.Is(err, ErrSkillFileProtected):
+		writeStatusError(c, http.StatusBadRequest, err)
 	default:
 		writeError(c, err)
 	}

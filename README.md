@@ -404,7 +404,7 @@ data/chats/<provider>/<conversation-id>/
 
 - Sessions：查看和修改 settings、token、memory、hooks、session transcript、session skills、schedule
 - Roles：管理 `templates/` 下的 role / template
-- Skills：查看和维护公共 skill
+- Skills：查看和维护公共 skill，支持在 skill 内新建 / 删除文件（多文件 skill，`SKILL.md` 不可删）
 - Repos：管理共享 repo 挂载源
 - Scripts：查看和维护系统级脚本
 - Subagents：查看和维护 subagent 定义

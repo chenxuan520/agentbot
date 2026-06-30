@@ -143,6 +143,24 @@ function pickDefaultSkillFilePath(files: WorkspaceFileItem[]): string {
   return files.find((item) => item.path === 'SKILL.md')?.path ?? files.find((item) => item.exists)?.path ?? files[0]?.path ?? ''
 }
 
+function normalizeRelativeFilePathInput(value: string): string | null {
+  const parts: string[] = []
+  for (const part of value.trim().split('/')) {
+    if (!part || part === '.') {
+      continue
+    }
+    if (part === '..') {
+      if (parts.length === 0) {
+        return null
+      }
+      parts.pop()
+      continue
+    }
+    parts.push(part)
+  }
+  return parts.length > 0 ? parts.join('/') : null
+}
+
 export function SkillsLibraryPage({ api, canManage = true }: SkillsLibraryPageProps) {
   const [items, setItems] = useState<SkillSummary[]>([])
   const [selectedSkillID, setSelectedSkillID] = useState('')
@@ -160,6 +178,10 @@ export function SkillsLibraryPage({ api, canManage = true }: SkillsLibraryPagePr
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [creatingFile, setCreatingFile] = useState(false)
+  const [deletingFile, setDeletingFile] = useState(false)
+  const [newFilePath, setNewFilePath] = useState('')
+  const [showDeleteFileConfirm, setShowDeleteFileConfirm] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -226,6 +248,7 @@ export function SkillsLibraryPage({ api, canManage = true }: SkillsLibraryPagePr
       setSelectedPath('')
       setExpandedDirectories([])
       setFileQuery('')
+      setNewFilePath('')
       setContent('')
       setDirty(false)
       return
@@ -242,6 +265,7 @@ export function SkillsLibraryPage({ api, canManage = true }: SkillsLibraryPagePr
         setFiles(nextFiles)
         setExpandedDirectories([])
         setFileQuery('')
+        setNewFilePath('')
         const nextVisibleFiles = nextFiles.filter((item) => !isHiddenPath(item.path))
         setSelectedPath((current) => {
           if (current && nextVisibleFiles.some((item) => item.path === current)) {
@@ -380,6 +404,72 @@ export function SkillsLibraryPage({ api, canManage = true }: SkillsLibraryPagePr
   async function handleDeleteConfirm() {
     await handleDeleteSkill()
     setShowDeleteConfirm(false)
+  }
+
+  async function handleCreateFile() {
+    if (!detail || readOnly) {
+      return
+    }
+    const rawPath = newFilePath.trim()
+    if (!rawPath) {
+      setMessage('请输入新文件的相对路径。')
+      return
+    }
+    if (rawPath.startsWith('/')) {
+      setMessage('请使用相对路径，例如 scripts/run.sh。')
+      return
+    }
+    const path = normalizeRelativeFilePathInput(rawPath)
+    if (!path) {
+      setMessage('请输入合法的相对文件路径，例如 scripts/run.sh。')
+      return
+    }
+    if (files.some((item) => item.path === path)) {
+      setMessage(`文件 ${path} 已存在。`)
+      return
+    }
+    setCreatingFile(true)
+    setMessage('')
+    try {
+      await api.createSkillFile(detail.id, path, '')
+      const nextFiles = await api.listSkillFiles(detail.id)
+      setFiles(nextFiles)
+      if (isHiddenPath(path)) {
+        setShowHiddenFiles(true)
+      }
+      setSelectedPath(path)
+      setNewFilePath('')
+      showSuccessToast(`已创建 ${path}`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '新建文件失败')
+    } finally {
+      setCreatingFile(false)
+    }
+  }
+
+  async function handleDeleteFile() {
+    if (!detail || readOnly || !selectedPath || selectedPath === 'SKILL.md') {
+      return
+    }
+    setDeletingFile(true)
+    setMessage('')
+    try {
+      const removed = selectedPath
+      await api.deleteSkillFile(detail.id, removed)
+      const nextFiles = await api.listSkillFiles(detail.id)
+      setFiles(nextFiles)
+      setSelectedPath(pickDefaultSkillFilePath(nextFiles.filter((item) => !isHiddenPath(item.path))))
+      showSuccessToast(`已删除 ${removed}`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '删除文件失败')
+    } finally {
+      setDeletingFile(false)
+    }
+  }
+
+  async function handleDeleteFileConfirm() {
+    await handleDeleteFile()
+    setShowDeleteFileConfirm(false)
   }
 
   function toggleDirectory(path: string) {
@@ -567,6 +657,29 @@ export function SkillsLibraryPage({ api, canManage = true }: SkillsLibraryPagePr
                         </span>
                       </div>
                       <input value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="搜索文件名或路径" />
+                      {!readOnly ? (
+                        <div className="skill-newfile-row">
+                          <input
+                            value={newFilePath}
+                            onChange={(event) => setNewFilePath(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                void handleCreateFile()
+                              }
+                            }}
+                            placeholder="新建文件，如 scripts/run.sh"
+                          />
+                          <button
+                            type="button"
+                            className="toolbar-button subtle"
+                            onClick={() => void handleCreateFile()}
+                            disabled={creatingFile || !newFilePath.trim()}
+                          >
+                            {creatingFile ? '创建中...' : '新建文件'}
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="file-list">
                       {filteredTree && visibleFiles.length > 0 ? (
@@ -601,9 +714,21 @@ export function SkillsLibraryPage({ api, canManage = true }: SkillsLibraryPagePr
                       {dirty ? <div className="muted small">有未保存改动</div> : null}
                     </div>
                     {!readOnly ? (
-                      <button type="button" onClick={() => void handleSave()} disabled={!selectedPath || saving || !dirty}>
-                        {saving ? '保存中...' : '保存'}
-                      </button>
+                      <div className="inline-actions">
+                        {selectedPath && selectedPath !== 'SKILL.md' ? (
+                          <button
+                            type="button"
+                            className="danger-button"
+                            onClick={() => setShowDeleteFileConfirm(true)}
+                            disabled={deletingFile}
+                          >
+                            {deletingFile ? '删除中...' : '删除文件'}
+                          </button>
+                        ) : null}
+                        <button type="button" onClick={() => void handleSave()} disabled={!selectedPath || saving || !dirty}>
+                          {saving ? '保存中...' : '保存'}
+                        </button>
+                      </div>
                     ) : null}
                   </div>
 
@@ -647,6 +772,15 @@ export function SkillsLibraryPage({ api, canManage = true }: SkillsLibraryPagePr
         loading={deleting}
         onCancel={() => setShowDeleteConfirm(false)}
         onConfirm={() => void handleDeleteConfirm()}
+      />
+      <ConfirmDialog
+        open={showDeleteFileConfirm && !!detail && !!selectedPath}
+        title="删除文件"
+        description={selectedPath ? `确认删除文件 \`${selectedPath}\` 吗？` : ''}
+        confirmLabel="确认删除"
+        loading={deletingFile}
+        onCancel={() => setShowDeleteFileConfirm(false)}
+        onConfirm={() => void handleDeleteFileConfirm()}
       />
     </div>
   )
