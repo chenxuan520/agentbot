@@ -35,10 +35,13 @@ curl -sS -X POST "$AGENT_BOT_API_BASE_URL/api/v1/schedule" \
 - 回原 topic / thread：填原消息 `message_id`
 - 故意直接发群：显式填空串 `"replyMessageID": ""`
 - 不允许省略这个字段；省略会被本地 API 拒绝
+- 一次性任务的 `runAt` 不能是历史时间；过去时间会被本地 API 拒绝
 
 如果只想回投一条普通提醒，把 `payload.promptText` 改成 `payload.notifyText`。
 
 一次性任务如果带 `promptText`，可以直接内联在 payload 里；不用额外落文件。
+
+如果用户给的是已经过去的时间，不要直接创建失败任务；先明确告诉用户这个时间已经过期，请他给一个新的未来时间。
 
 如果是 cron 周期任务，平台会自动把 prompt 落到专门的 prompt 文件目录里，再把 job payload 改成 `promptFile` 引用；不用手动管文件路径。
 
@@ -65,6 +68,7 @@ curl -sS -X POST "$AGENT_BOT_API_BASE_URL/api/v1/schedule" \
 - `cron` 和 `runAt` 二选一
 - 周期任务必须显式带 `timezone`
 - `timezone` 推荐用 IANA 名称，例如 `Asia/Shanghai`、`UTC`、`Europe/Berlin`
+- cron 会按当前时间往后算第一次触发，不需要手动把它换算成某个未来 `runAt`
 
 ## 查看当前会话任务
 

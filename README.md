@@ -459,6 +459,11 @@ go run ./cmd/agent-bot schedule list feishu demo-chat
 go run ./cmd/agent-bot schedule create feishu demo-chat 2026-05-06T10:00:00+08:00 reminder.follow_up '{"replyMessageID":"om_xxx","promptText":"15分钟后提醒我继续处理"}'
 ```
 
+说明：
+
+- 一次性任务的 `runAt` 必须是合法 RFC3339 时间，并且不能早于当前时间；过去时间会被拒绝
+- `cron` 周期任务不需要手动算未来时间，平台会按当前时刻计算下一次触发
+
 ## Hooks
 
 每个会话支持三个 Python hooks：

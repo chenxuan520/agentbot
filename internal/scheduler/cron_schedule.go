@@ -28,6 +28,9 @@ func FirstRunAt(runAtText, cronExpr, timezone string, now time.Time) (time.Time,
 		if err != nil {
 			return time.Time{}, err
 		}
+		if runAt.Before(now.UTC()) {
+			return time.Time{}, fmt.Errorf("schedule runAt must not be in the past")
+		}
 		return runAt.UTC(), nil
 	default:
 		if strings.TrimSpace(timezone) == "" {

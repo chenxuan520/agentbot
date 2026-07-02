@@ -111,6 +111,19 @@ func TestFirstRunAtCronUsesTimezone(t *testing.T) {
 	}
 }
 
+func TestFirstRunAtRejectsPastOneShot(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 23, 30, 0, 0, time.UTC)
+	_, err := FirstRunAt("2026-05-10T23:29:59Z", "", "", now)
+	if err == nil {
+		t.Fatal("expected past runAt to be rejected")
+	}
+	if !strings.Contains(err.Error(), "must not be in the past") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestNextRunAtCronUsesTimezone(t *testing.T) {
 	t.Parallel()
 

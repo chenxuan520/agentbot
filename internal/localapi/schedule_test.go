@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chenxuan520/agentbot/internal/config"
 	"github.com/chenxuan520/agentbot/internal/scheduler"
@@ -95,4 +96,32 @@ func TestScheduleListResolvesPromptTextAndCanUpdatePrompt(t *testing.T) {
 	}
 
 	assertPromptText("second prompt")
+}
+
+func TestScheduleCreateRejectsPastRunAt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfg := config.Default(root)
+	store, err := storesqlite.Open(cfg.DBPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	server := New(cfg, nil, scheduler.NewService(store), nil, nil)
+	router := server.router()
+
+	past := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	body := `{"provider":"feishu","conversationId":"chat-1","runAt":"` + past + `","route":"report.once","payload":{"replyMessageID":"","promptText":"late prompt"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/schedule", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "must not be in the past") {
+		t.Fatalf("unexpected body: %s", resp.Body.String())
+	}
 }

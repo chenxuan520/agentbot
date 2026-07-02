@@ -122,7 +122,8 @@ worker loop 每轮会：
 这意味着：
 
 - 进程重启后，`pending` 任务还在，不会丢
-- 如果服务停机错过了触发时间，重启后下一轮会补跑这些 `run_at <= now` 的 `pending` 任务
+- 如果服务停机错过了触发时间，重启后下一轮会补跑这些已存在的 `run_at <= now` 的 `pending` 任务
+- 一次性任务创建时要求 `runAt` 不能早于当前时间；过去时间不会入库成“待补跑”任务
 - `.agents/runtime/triggered-jobs.jsonl` 只是触发日志，不是任务真实来源
 
 崩溃恢复（running 回收）：
