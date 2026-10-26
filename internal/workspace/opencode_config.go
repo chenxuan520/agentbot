@@ -70,6 +70,27 @@ func enforceQuestionDenied(configBody map[string]any) {
 		"question": "deny",
 	})
 
+	if permissions, ok := configBody["permissions"].([]any); ok {
+		configBody["permissions"] = appendNativeQuestionDeny(permissions)
+	}
+	if nativeAgents := asJSONObject(configBody["agents"]); len(nativeAgents) > 0 {
+		nativeAgents = mergeJSON(nativeAgents, nil)
+		for name, value := range nativeAgents {
+			agentConfig, ok := value.(map[string]any)
+			if !ok || agentConfig == nil {
+				continue
+			}
+			permissions, ok := agentConfig["permissions"].([]any)
+			if _, exists := agentConfig["permissions"]; exists && !ok {
+				continue
+			}
+			agentConfig = mergeJSON(agentConfig, nil)
+			agentConfig["permissions"] = appendNativeQuestionDeny(permissions)
+			nativeAgents[name] = agentConfig
+		}
+		configBody["agents"] = nativeAgents
+	}
+
 	agents := asJSONObject(configBody["agent"])
 	if len(agents) == 0 {
 		return
@@ -82,6 +103,21 @@ func enforceQuestionDenied(configBody map[string]any) {
 		agents[name] = agentConfig
 	}
 	configBody["agent"] = agents
+}
+
+func appendNativeQuestionDeny(permissions []any) []any {
+	permissions = append([]any(nil), permissions...)
+	if len(permissions) > 0 {
+		last := asJSONObject(permissions[len(permissions)-1])
+		if len(last) == 3 && last["action"] == "question" && last["resource"] == "*" && last["effect"] == "deny" {
+			return permissions
+		}
+	}
+	return append(permissions, map[string]any{
+		"action":   "question",
+		"resource": "*",
+		"effect":   "deny",
+	})
 }
 
 func mergeJSON(base, patch map[string]any) map[string]any {

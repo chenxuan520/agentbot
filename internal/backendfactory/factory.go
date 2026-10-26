@@ -25,7 +25,11 @@ func fromTimeoutSeconds(cfg config.Config, name string, timeoutSeconds int) (bac
 		if baseURL == "" {
 			return nil, fmt.Errorf("missing base url for backend %q", name)
 		}
-		options := opencodebackend.Options{}
+		options := opencodebackend.Options{
+			AutoDetect: true,
+			Username:   cfg.OpencodeUsername,
+			Password:   cfg.OpencodePassword,
+		}
 		if timeoutSeconds > 0 {
 			options.HTTPTimeout = time.Duration(timeoutSeconds) * time.Second
 		}

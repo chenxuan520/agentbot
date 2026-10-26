@@ -16,7 +16,7 @@
 ## 当前状态
 
 - 当前正式接好的 IM provider：`feishu`
-- 当前正式接好的 agent backend：`opencode serve`
+- 当前正式接好的 agent backend：`opencode serve`，支持 1.x 与 2.1.x API 自动识别
 - 其他 provider/backend 不是“配一下就能用”，需要补代码接入
 
 ## 适合什么场景
@@ -44,6 +44,7 @@
 - 支持 `/btw` 这种“同会话下按发送者隔离的额外 session”
 - 支持 Python hooks：`before_message.py`、`on_reaction.py`、`after_reply.py`
 - 支持会话级 scheduler：一次性任务、cron、prompt replay、notify replay
+- 支持 `opencode` 主 session 后续回复自动回投：后台 subagent 完成后，由主 agent 汇总并回复飞书，按消息 ID 去重、断线补漏
 - 支持其他 bot 消息补投
 - 支持 remote-agent：本地 agent 插件通过 WebSocket 接管某个会话
 - 支持 scheduler 崩溃恢复：重启时把崩溃残留的 `running` 任务回收续跑（at-least-once，带 attempts 上限）
@@ -238,6 +239,18 @@ agent-bot.json
 }
 ```
 
+### OpenCode 1 / 2 兼容
+
+backend 仍填写 `opencode`，`backends.opencode.baseURL` 指向对应实例的根地址，不追加 `/api`。平台自动识别 1.x 的 REST API 或 2.1.x 的 `/api` API；2.x 的 prompt 入队回执不会当成回复，平台会等待执行完成后读取最终正文。
+
+受保护的 server 可配置 `backends.opencode.username` / `password`。2.x 的 Basic 用户名固定为 `opencode`，password 可使用 server password 或 pairing token；它不是模型 API key。字段未配置时，平台读取 `OPENCODE_SERVER_USERNAME`，密码优先读取 `OPENCODE_PASSWORD`，再回退到 `OPENCODE_SERVER_PASSWORD`。凭证只保存在受限的运行配置或环境中，不写入会话 workspace。
+
+已有 `.session-setting.json`、`.opencode -> .agents`、skills、memory 和 hooks 布局保持不变；OpenCode 2 兼容已有受支持的 1.x 配置。`agent.model` 在 1.x 通过逐消息 model override 设置，在 2.x 通过 session model API 设置；2.x 可用 `provider/model#xhigh` 选择已注册 variant。`SystemText` 在 2.x 转为本批次的 session instruction entries，完成后定向清理。
+
+2.x 的 native 消息没有 1.x 的回复 parentID。平台按服务端消息顺序、排队标记和后台 subagent 来源关联回投；只有所有来源都能唯一关联到同一飞书消息 / 话题才发送，未知或跨来源歧义会记录错误，不猜最近一条消息。切换到另一版本实例时，不自动迁移 backend transcript 或复用另一实例的 session 绑定；保留 workspace 状态后执行 `/new` 创建新 session。
+
+已通过 1.x 回归及真实 OpenCode 2.1.2 隔离实例的本地假模型验证，覆盖入队、等待、批次指令、后台回投与事件取消。可设置 `AGENT_BOT_OPENCODE2_BINARY` 为直接的 2.x 可执行文件路径，运行 `go test ./internal/backend/opencode -run TestV2LiveServerContract -count=1` 重复该验证；该测试使用临时目录和本地测试模型，不使用生产凭证。
+
 ### 会话配置：`.session-setting.json`
 
 每个会话都有自己的一份：
@@ -373,6 +386,14 @@ data/chats/<provider>/<conversation-id>/
 - scheduler 的 `notifyText`
 - 其他 bot 消息补投
 - remote-agent 回投
+
+### 后台 subagent 的回复
+
+`agent-bot run` 和 `provider feishu listen` 会持续监听 `opencode` 的事件流：1.x 使用 `/global/event`，2.x 使用 `/api/event`。原来的同步回复保持不变；主 session 在后台任务完成后新生成的最终文本也会经过 `after_reply.py` 回到原飞书消息 / 话题，子 session 的文本不会直接发送。
+
+平台在 SQLite 保存每条 prompt 的原消息路由与已投递 assistant 消息 ID；断线重连或 agent-bot 重启时拉取已登记 session 的历史补漏，不会重发未登记的旧历史。同步返回与事件监听共用消息 ID 去重，发送失败不会记作已投递，会按 5 秒重连退避自动补投，也不阻塞同 session 的其它话题；发送成功但进程在记账前崩溃时仍可能重复，不保证 exactly-once。
+
+1.x 后台执行需要 `opencode` 本身启用 `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`；2.x 使用原生后台 subagent 机制。平台不额外唤醒主 agent；`opencode` 重启或 instance dispose 中断的后台任务不会由平台恢复。此回投不通过 scheduler，不改变原定时任务行为。
 
 ## 回复模式与 session 模式
 

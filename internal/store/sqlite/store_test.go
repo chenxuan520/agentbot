@@ -3,6 +3,7 @@ package sqlite
 import (
 	"database/sql"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/chenxuan520/agentbot/internal/scheduler"
 	appstore "github.com/chenxuan520/agentbot/internal/store"
 )
+
+var _ appstore.ReplyStore = (*Store)(nil)
 
 func TestStoreRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -126,6 +129,41 @@ func TestOpenMigratesLegacyWorkspaceTableForBTWSession(t *testing.T) {
 	}
 	if loaded.BTWSessionID != "" {
 		t.Fatalf("btw session = %q, want empty", loaded.BTWSessionID)
+	}
+	want := appstore.WorkspaceRecord{
+		Provider:        "feishu",
+		ConversationID:  "legacy-chat",
+		WorkspacePath:   "/tmp/legacy-chat",
+		Template:        "default",
+		AgentBackend:    "opencode",
+		ActiveSessionID: "session-main",
+		LastMessageAt:   now,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if *loaded != want {
+		t.Fatalf("migrated workspace = %+v, want %+v", *loaded, want)
+	}
+
+	source := appstore.ReplySourceRecord{
+		SessionID:      "session-main",
+		MessageID:      "msg-legacy",
+		Provider:       want.Provider,
+		ConversationID: want.ConversationID,
+		WorkspacePath:  want.WorkspacePath,
+		InputJSON:      `{"message_id":"om-legacy"}`,
+	}
+	if err := store.UpsertReplySource(source); err != nil {
+		t.Fatalf("upsert migrated reply source: %v", err)
+	}
+	if sources, err := store.ListReplySources(source.SessionID); err != nil || !slices.Equal(sources, []appstore.ReplySourceRecord{source}) {
+		t.Fatalf("migrated reply sources = %+v (err %v), want %+v", sources, err, source)
+	}
+	if err := store.MarkReplyDelivered(source.SessionID, source.MessageID); err != nil {
+		t.Fatalf("mark migrated reply delivered: %v", err)
+	}
+	if delivered, err := store.ReplyDelivered(source.SessionID, source.MessageID); err != nil || !delivered {
+		t.Fatalf("migrated reply delivered = %v (err %v), want true", delivered, err)
 	}
 
 	loaded.BTWSessionID = "session-btw"
@@ -268,6 +306,220 @@ func TestStoreTopicSessionRoundTrip(t *testing.T) {
 	}
 	if has, err := store.HasTopicSessions(ref); err != nil || has {
 		t.Fatalf("has topic sessions after delete state = %v (err %v), want false", has, err)
+	}
+}
+
+func TestStoreReplySourcesRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite3")
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	if sources, err := store.ListReplySources(""); err != nil || len(sources) != 0 {
+		t.Fatalf("initial reply sources = %+v (err %v), want empty", sources, err)
+	}
+
+	ref := conversation.Ref{Provider: "feishu", ConversationID: "chat-a"}
+	now := time.Now().UTC().Truncate(time.Second)
+	workspace := appstore.WorkspaceRecord{
+		Provider:        ref.Provider,
+		ConversationID:  ref.ConversationID,
+		WorkspacePath:   "/tmp/chat-a",
+		Template:        "default",
+		AgentBackend:    "opencode",
+		ActiveSessionID: "session-new",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := store.Upsert(workspace); err != nil {
+		t.Fatalf("upsert workspace: %v", err)
+	}
+
+	sources := []appstore.ReplySourceRecord{
+		{
+			SessionID:      "session-a",
+			MessageID:      "msg-1",
+			Provider:       "feishu",
+			ConversationID: "chat-a",
+			WorkspacePath:  "/tmp/chat-a",
+			InputJSON:      `{"input":{"message_id":"om-1","thread_id":"thread-1","sender_id":"ou-1"},"reply_mode":"thread","slot":"main"}`,
+		},
+		{
+			SessionID:      "session-a",
+			MessageID:      "msg-2",
+			Provider:       "feishu",
+			ConversationID: "chat-a",
+			WorkspacePath:  "/tmp/chat-a",
+			InputJSON:      `{"input":{"message_id":"om-2","thread_id":"thread-2","sender_id":"ou-2"},"reply_mode":"thread","slot":"main"}`,
+		},
+		{
+			SessionID:      "session-b",
+			MessageID:      "msg-1",
+			Provider:       "feishu",
+			ConversationID: "chat-b",
+			WorkspacePath:  "/tmp/chat-b",
+			InputJSON:      `{"input":{"message_id":"om-3","sender_id":"ou-3"},"reply_mode":"message","slot":"main"}`,
+		},
+	}
+	for i := len(sources) - 1; i >= 0; i-- {
+		if err := store.UpsertReplySource(sources[i]); err != nil {
+			t.Fatalf("upsert reply source %d: %v", i, err)
+		}
+	}
+
+	sources[0].Provider = "other-provider"
+	sources[0].ConversationID = "chat-updated"
+	sources[0].WorkspacePath = "/tmp/chat-updated"
+	sources[0].InputJSON = `{"input":{"message_id":"om-updated","thread_id":"thread-updated","sender_id":"ou-updated"},"reply_mode":"thread","slot":"main"}`
+	if err := store.UpsertReplySource(sources[0]); err != nil {
+		t.Fatalf("update reply source: %v", err)
+	}
+
+	for _, tc := range []struct {
+		sessionID string
+		want      []appstore.ReplySourceRecord
+	}{
+		{sessionID: "session-a", want: sources[:2]},
+		{sessionID: "session-b", want: sources[2:]},
+		{sessionID: "", want: sources},
+		{sessionID: "missing"},
+	} {
+		listed, err := store.ListReplySources(tc.sessionID)
+		if err != nil || !slices.Equal(listed, tc.want) {
+			t.Fatalf("reply sources for %q = %+v (err %v), want %+v", tc.sessionID, listed, err, tc.want)
+		}
+	}
+
+	if delivered, err := store.ReplyDelivered("session-a", "msg-1"); err != nil || delivered {
+		t.Fatalf("initial reply delivered = %v (err %v), want false", delivered, err)
+	}
+	if err := store.MarkReplyDelivered("session-a", "msg-1"); err != nil {
+		t.Fatalf("mark reply delivered: %v", err)
+	}
+	var deliveredAt int64
+	if err := store.db.QueryRow(`SELECT delivered_at FROM backend_reply_deliveries WHERE session_id = ? AND message_id = ?`, "session-a", "msg-1").Scan(&deliveredAt); err != nil || deliveredAt <= 0 {
+		t.Fatalf("delivered at = %d (err %v), want positive timestamp", deliveredAt, err)
+	}
+	if _, err := store.db.Exec(`UPDATE backend_reply_deliveries SET delivered_at = ? WHERE session_id = ? AND message_id = ?`, 123, "session-a", "msg-1"); err != nil {
+		t.Fatalf("set delivered timestamp: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := store.MarkReplyDelivered("session-a", "msg-1"); err != nil {
+			t.Fatalf("mark reply delivered again: %v", err)
+		}
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*), MIN(delivered_at) FROM backend_reply_deliveries WHERE session_id = ? AND message_id = ?`, "session-a", "msg-1").Scan(&count, &deliveredAt); err != nil || count != 1 || deliveredAt != 123 {
+		t.Fatalf("delivery count = %d, delivered at = %d (err %v), want 1, 123", count, deliveredAt, err)
+	}
+	for _, tc := range []struct {
+		sessionID string
+		messageID string
+		want      bool
+	}{
+		{sessionID: "session-a", messageID: "msg-1", want: true},
+		{sessionID: "session-a", messageID: "msg-2"},
+		{sessionID: "session-b", messageID: "msg-1"},
+	} {
+		if delivered, err := store.ReplyDelivered(tc.sessionID, tc.messageID); err != nil || delivered != tc.want {
+			t.Fatalf("reply delivered for %s/%s = %v (err %v), want %v", tc.sessionID, tc.messageID, delivered, err, tc.want)
+		}
+	}
+	if err := store.MarkReplyDelivered("session-b", "msg-1"); err != nil {
+		t.Fatalf("mark reply delivered in other session: %v", err)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	reopened, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer reopened.Close()
+
+	if listed, err := reopened.ListReplySources(""); err != nil || !slices.Equal(listed, sources) {
+		t.Fatalf("reopened reply sources = %+v (err %v), want %+v", listed, err, sources)
+	}
+	for _, sessionID := range []string{"session-a", "session-b"} {
+		if delivered, err := reopened.ReplyDelivered(sessionID, "msg-1"); err != nil || !delivered {
+			t.Fatalf("reopened reply delivered for %s = %v (err %v), want true", sessionID, delivered, err)
+		}
+	}
+	if loaded, err := reopened.Get(ref); err != nil || loaded == nil || *loaded != workspace {
+		t.Fatalf("workspace after old session replies = %+v (err %v), want %+v", loaded, err, workspace)
+	}
+}
+
+func TestDeleteConversationStateDeletesOnlyOwnReplies(t *testing.T) {
+	t.Parallel()
+
+	store, err := Open(filepath.Join(t.TempDir(), "state.sqlite3"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	refs := []conversation.Ref{
+		{Provider: "feishu", ConversationID: "chat-delete"},
+		{Provider: "feishu", ConversationID: "chat-keep"},
+		{Provider: "other-provider", ConversationID: "chat-delete"},
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, ref := range refs {
+		if err := store.Upsert(appstore.WorkspaceRecord{
+			Provider:        ref.Provider,
+			ConversationID:  ref.ConversationID,
+			WorkspacePath:   "/tmp/" + ref.ConversationID,
+			Template:        "default",
+			AgentBackend:    "opencode",
+			ActiveSessionID: "session-new",
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}); err != nil {
+			t.Fatalf("upsert workspace: %v", err)
+		}
+	}
+
+	sources := []appstore.ReplySourceRecord{
+		{SessionID: "session-old", MessageID: "msg-user", Provider: refs[0].Provider, ConversationID: refs[0].ConversationID, WorkspacePath: "/tmp/chat-delete", InputJSON: `{}`},
+		{SessionID: "session-older", MessageID: "msg-user", Provider: refs[0].Provider, ConversationID: refs[0].ConversationID, WorkspacePath: "/tmp/chat-delete", InputJSON: `{}`},
+		{SessionID: "session-keep", MessageID: "msg-user", Provider: refs[1].Provider, ConversationID: refs[1].ConversationID, WorkspacePath: "/tmp/chat-keep", InputJSON: `{}`},
+		{SessionID: "session-other", MessageID: "msg-user", Provider: refs[1].Provider, ConversationID: refs[1].ConversationID, WorkspacePath: "/tmp/chat-keep", InputJSON: `{}`},
+		{SessionID: "session-provider", MessageID: "msg-user", Provider: refs[2].Provider, ConversationID: refs[2].ConversationID, WorkspacePath: "/tmp/chat-delete", InputJSON: `{}`},
+	}
+	for _, source := range sources {
+		if err := store.UpsertReplySource(source); err != nil {
+			t.Fatalf("upsert reply source: %v", err)
+		}
+		if err := store.MarkReplyDelivered(source.SessionID, "msg-assistant"); err != nil {
+			t.Fatalf("mark reply delivered: %v", err)
+		}
+	}
+
+	if err := store.DeleteConversationState(refs[0]); err != nil {
+		t.Fatalf("delete conversation state: %v", err)
+	}
+	if err := store.DeleteConversationState(refs[0]); err != nil {
+		t.Fatalf("delete conversation state again: %v", err)
+	}
+	if listed, err := store.ListReplySources(""); err != nil || !slices.Equal(listed, sources[2:]) {
+		t.Fatalf("remaining reply sources = %+v (err %v), want %+v", listed, err, sources[2:])
+	}
+	for i, source := range sources {
+		want := i >= 2
+		if delivered, err := store.ReplyDelivered(source.SessionID, "msg-assistant"); err != nil || delivered != want {
+			t.Fatalf("reply delivered for %s/msg-assistant = %v (err %v), want %v", source.SessionID, delivered, err, want)
+		}
+	}
+	for i, ref := range refs {
+		if loaded, err := store.Get(ref); err != nil || (loaded == nil) != (i == 0) {
+			t.Fatalf("workspace after delete for %+v = %+v (err %v), want deleted = %v", ref, loaded, err, i == 0)
+		}
 	}
 }
 

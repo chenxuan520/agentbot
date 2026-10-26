@@ -16,6 +16,7 @@ import (
 	"github.com/chenxuan520/agentbot/internal/provider"
 	providerapi "github.com/chenxuan520/agentbot/internal/providerapi"
 	"github.com/chenxuan520/agentbot/internal/session"
+	appstore "github.com/chenxuan520/agentbot/internal/store"
 	"github.com/chenxuan520/agentbot/internal/workspace"
 )
 
@@ -61,6 +62,8 @@ type Service struct {
 	mu         sync.Mutex
 	locks      map[string]*sync.Mutex
 	states     map[string]*conversationRunState
+	replies    appstore.ReplyStore
+	replyLocks map[string]*sync.Mutex
 }
 
 type TextInput struct {
@@ -83,9 +86,13 @@ type TextInput struct {
 }
 
 type PromptResult struct {
-	Backend   string
-	SessionID string
-	ReplyText string
+	Backend          string
+	SessionID        string
+	ReplyText        string
+	MessageID        string   `json:",omitempty"`
+	ParentID         string   `json:"-"`
+	Native           bool     `json:"-"`
+	SourceMessageIDs []string `json:"-"`
 }
 
 func NewService(cfg config.Config, sessions *session.Service, controlService *control.Service, accessServices ...*accesstoken.Service) *Service {
@@ -105,6 +112,8 @@ func NewService(cfg config.Config, sessions *session.Service, controlService *co
 		afterReply: runAfterReplyHook,
 		locks:      map[string]*sync.Mutex{},
 		states:     map[string]*conversationRunState{},
+		replies:    sessions.ReplyStore(),
+		replyLocks: map[string]*sync.Mutex{},
 	}
 }
 
@@ -179,6 +188,7 @@ func (s *Service) promptConversationBTW(ctx context.Context, ref conversation.Re
 	}
 
 	options.Model = strings.TrimSpace(prepared.Workspace.Settings.Agent.Model)
+	options.OnPromptMessage = s.promptMessageRecorder(ctx, prepared.Workspace.Path, sessionID, options.OnPromptMessage)
 	result, err := client.Prompt(ctx, prepared.Workspace.Path, sessionID, text, attachments, options)
 	if err != nil {
 		return PromptResult{}, err
@@ -189,9 +199,13 @@ func (s *Service) promptConversationBTW(ctx context.Context, ref conversation.Re
 	}
 
 	return PromptResult{
-		Backend:   prepared.AgentBackend,
-		SessionID: result.SessionID,
-		ReplyText: result.ReplyText,
+		Backend:          prepared.AgentBackend,
+		SessionID:        result.SessionID,
+		ReplyText:        result.ReplyText,
+		MessageID:        result.MessageID,
+		ParentID:         result.ParentID,
+		Native:           result.Native,
+		SourceMessageIDs: result.SourceMessageIDs,
 	}, nil
 }
 
@@ -222,6 +236,7 @@ func (s *Service) promptConversationSlot(ctx context.Context, ref conversation.R
 	}
 
 	options.Model = strings.TrimSpace(prepared.Workspace.Settings.Agent.Model)
+	options.OnPromptMessage = s.promptMessageRecorder(ctx, prepared.Workspace.Path, sessionID, options.OnPromptMessage)
 	result, err := client.Prompt(ctx, prepared.Workspace.Path, sessionID, text, attachments, options)
 	if err != nil {
 		return PromptResult{}, err
@@ -232,9 +247,13 @@ func (s *Service) promptConversationSlot(ctx context.Context, ref conversation.R
 	}
 
 	return PromptResult{
-		Backend:   prepared.AgentBackend,
-		SessionID: result.SessionID,
-		ReplyText: result.ReplyText,
+		Backend:          prepared.AgentBackend,
+		SessionID:        result.SessionID,
+		ReplyText:        result.ReplyText,
+		MessageID:        result.MessageID,
+		ParentID:         result.ParentID,
+		Native:           result.Native,
+		SourceMessageIDs: result.SourceMessageIDs,
 	}, nil
 }
 
@@ -268,6 +287,7 @@ func (s *Service) promptConversationTopic(ctx context.Context, ref conversation.
 	}
 
 	options.Model = strings.TrimSpace(prepared.Workspace.Settings.Agent.Model)
+	options.OnPromptMessage = s.promptMessageRecorder(ctx, prepared.Workspace.Path, sessionID, options.OnPromptMessage)
 	result, err := client.Prompt(ctx, prepared.Workspace.Path, sessionID, text, attachments, options)
 	if err != nil {
 		return PromptResult{}, err
@@ -278,9 +298,13 @@ func (s *Service) promptConversationTopic(ctx context.Context, ref conversation.
 	}
 
 	return PromptResult{
-		Backend:   prepared.AgentBackend,
-		SessionID: result.SessionID,
-		ReplyText: result.ReplyText,
+		Backend:          prepared.AgentBackend,
+		SessionID:        result.SessionID,
+		ReplyText:        result.ReplyText,
+		MessageID:        result.MessageID,
+		ParentID:         result.ParentID,
+		Native:           result.Native,
+		SourceMessageIDs: result.SourceMessageIDs,
 	}, nil
 }
 
@@ -320,6 +344,13 @@ func (s *Service) ProcessText(ctx context.Context, input TextInput) (PromptResul
 		return PromptResult{}, err
 	}
 
+	if command, args := parseCommand(input.Text); s.replies != nil && command == "/btw" && len(args) > 0 {
+		gate := s.replyLock("prompt:" + conversationKey(ref))
+		if err := lockReplyContext(ctx, gate); err != nil {
+			return PromptResult{}, err
+		}
+		defer gate.Unlock()
+	}
 	commandResult, err := s.handleCommand(ctx, ref, input)
 	if err != nil {
 		return PromptResult{}, err
@@ -331,20 +362,42 @@ func (s *Service) ProcessText(ctx context.Context, input TextInput) (PromptResul
 		}
 		processingReactionID := s.addProcessingReaction(ctx, client, input)
 		defer s.deleteProcessingReaction(input, client, processingReactionID)
+		replyMode := current.Workspace.Settings.Settings.ReplyMode
+		route, err := s.replyRouteFor(ctx, current.Workspace.Path, commandResult.agent)
+		if err != nil {
+			return PromptResult{}, err
+		}
+		if route != nil {
+			input, replyMode = route.Input, route.ReplyMode
+		}
+		unlock, delivered, err := s.lockReply(ctx, commandResult.agent.SessionID, commandResult.agent.MessageID)
+		if err != nil {
+			return PromptResult{}, err
+		}
+		defer unlock()
+		if delivered {
+			return PromptResult{ReplyText: commandResult.replyText}, nil
+		}
 		replyText := commandResult.replyText
 		replyOptions := defaultReplyOptions(input)
 		if commandResult.viaAgent {
 			replyText, replyOptions, err = s.FinalizeReply(ctx, ref, input, replyText, replyOptions)
 			if err != nil {
 				hookReply := fmt.Sprintf("after_reply.py 执行失败: %s", err)
-				if err := s.replyText(ctx, client, input, current.Workspace.Settings.Settings.ReplyMode, hookReply, defaultReplyOptions(input)); err != nil {
+				if err := s.replyText(ctx, client, input, replyMode, hookReply, defaultReplyOptions(input)); err != nil {
+					return PromptResult{}, err
+				}
+				if err := s.markReplyDelivered(commandResult.agent.SessionID, commandResult.agent.MessageID); err != nil {
 					return PromptResult{}, err
 				}
 				return PromptResult{ReplyText: hookReply}, nil
 			}
 		}
 		result := PromptResult{ReplyText: replyText}
-		if err := s.replyText(ctx, client, input, current.Workspace.Settings.Settings.ReplyMode, replyText, replyOptions); err != nil {
+		if err := s.replyText(ctx, client, input, replyMode, replyText, replyOptions); err != nil {
+			return PromptResult{}, err
+		}
+		if err := s.markReplyDelivered(commandResult.agent.SessionID, commandResult.agent.MessageID); err != nil {
 			return PromptResult{}, err
 		}
 		return result, nil
@@ -484,6 +537,13 @@ func (s *Service) processPromptBatch(ctx context.Context, ref conversation.Ref, 
 	if len(prompts) == 0 {
 		return PromptResult{}, nil
 	}
+	if s.replies != nil {
+		gate := s.replyLock("prompt:" + conversationKey(ref))
+		if err := lockReplyContext(ctx, gate); err != nil {
+			return PromptResult{}, err
+		}
+		defer gate.Unlock()
+	}
 
 	client, err := s.providers(s.cfg, prompts[len(prompts)-1].input.Provider)
 	if err != nil {
@@ -504,7 +564,7 @@ func (s *Service) processPromptBatch(ctx context.Context, ref conversation.Ref, 
 		var firstResult PromptResult
 		for i, prompt := range prompts {
 			topicKey := topicKeyForMessage(prompt.input, replyMode)
-			result, err := s.promptConversationTopic(ctx, ref, topicKey, prompt.input.Text, prompt.input.Attachments, backend.PromptOptions{
+			result, err := s.promptConversationTopic(withReplyRoute(ctx, prompt.input, replyMode), ref, topicKey, prompt.input.Text, prompt.input.Attachments, backend.PromptOptions{
 				System: prompt.input.SystemText,
 			})
 			if err != nil {
@@ -521,18 +581,26 @@ func (s *Service) processPromptBatch(ctx context.Context, ref conversation.Ref, 
 		return firstResult, nil
 	}
 
+	var systemMessageIDs []string
 	for _, prompt := range prompts[:len(prompts)-1] {
-		if _, err := s.promptConversation(ctx, ref, prompt.input.Text, prompt.input.Attachments, backend.PromptOptions{
+		if _, err := s.promptConversation(withReplyRoute(ctx, prompts[len(prompts)-1].input, replyMode), ref, prompt.input.Text, prompt.input.Attachments, backend.PromptOptions{
 			NoReply: true,
 			System:  prompt.input.SystemText,
+			OnPromptMessage: func(messageID string) error {
+				if strings.TrimSpace(prompt.input.SystemText) != "" {
+					systemMessageIDs = append(systemMessageIDs, messageID)
+				}
+				return nil
+			},
 		}); err != nil {
 			return PromptResult{}, err
 		}
 	}
 
 	finalInput := prompts[len(prompts)-1].input
-	result, err := s.promptConversation(ctx, ref, finalInput.Text, finalInput.Attachments, backend.PromptOptions{
-		System: finalInput.SystemText,
+	result, err := s.promptConversation(withReplyRoute(ctx, finalInput, replyMode), ref, finalInput.Text, finalInput.Attachments, backend.PromptOptions{
+		System:           finalInput.SystemText,
+		SystemMessageIDs: systemMessageIDs,
 	})
 	if err != nil {
 		return PromptResult{}, err
@@ -544,11 +612,29 @@ func (s *Service) processPromptBatch(ctx context.Context, ref conversation.Ref, 
 // finalizeAgentReply runs after_reply.py over an agent result and sends the
 // (possibly rewritten) reply, applying any mention overrides the hook returns.
 func (s *Service) finalizeAgentReply(ctx context.Context, client providerapi.Client, input TextInput, replyMode, workspacePath string, result PromptResult) (PromptResult, error) {
+	route, err := s.replyRouteFor(ctx, workspacePath, result)
+	if err != nil {
+		return PromptResult{}, err
+	}
+	if route != nil {
+		input, replyMode = route.Input, route.ReplyMode
+	}
+	unlock, delivered, err := s.lockReply(ctx, result.SessionID, result.MessageID)
+	if err != nil {
+		return PromptResult{}, err
+	}
+	defer unlock()
+	if delivered {
+		return result, nil
+	}
 	replyOptions := defaultReplyOptions(input)
 	afterReplyResult, err := s.afterReply(ctx, workspacePath, input, result.ReplyText)
 	if err != nil {
 		hookReply := fmt.Sprintf("after_reply.py 执行失败: %s", err)
 		if err := s.replyText(ctx, client, input, replyMode, hookReply, defaultReplyOptions(input)); err != nil {
+			return PromptResult{}, err
+		}
+		if err := s.markReplyDelivered(result.SessionID, result.MessageID); err != nil {
 			return PromptResult{}, err
 		}
 		return PromptResult{ReplyText: hookReply}, nil
@@ -564,6 +650,9 @@ func (s *Service) finalizeAgentReply(ctx context.Context, client providerapi.Cli
 		replyOptions.MentionUserIDs = nil
 	}
 	if err := s.replyText(ctx, client, input, replyMode, result.ReplyText, replyOptions); err != nil {
+		return PromptResult{}, err
+	}
+	if err := s.markReplyDelivered(result.SessionID, result.MessageID); err != nil {
 		return PromptResult{}, err
 	}
 	return result, nil

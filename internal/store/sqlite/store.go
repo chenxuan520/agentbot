@@ -159,6 +159,33 @@ func (s *Store) init() error {
 	}
 
 	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS backend_reply_sources (
+			session_id TEXT NOT NULL,
+			message_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			conversation_id TEXT NOT NULL,
+			workspace_path TEXT NOT NULL,
+			input_json TEXT NOT NULL,
+			PRIMARY KEY (session_id, message_id)
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS backend_reply_deliveries (
+			session_id TEXT NOT NULL,
+			message_id TEXT NOT NULL,
+			delivered_at INTEGER NOT NULL,
+			PRIMARY KEY (session_id, message_id)
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS message_progress (
 			provider TEXT NOT NULL,
 			conversation_id TEXT NOT NULL,
@@ -428,6 +455,10 @@ func (s *Store) DeleteConversationState(ref conversation.Ref) error {
 	}()
 
 	for _, query := range []string{
+		`DELETE FROM backend_reply_deliveries WHERE session_id IN (
+			SELECT session_id FROM backend_reply_sources WHERE provider = ? AND conversation_id = ?
+		)`,
+		`DELETE FROM backend_reply_sources WHERE provider = ? AND conversation_id = ?`,
 		`DELETE FROM conversation_btw_sessions WHERE provider = ? AND conversation_id = ?`,
 		`DELETE FROM conversation_topic_sessions WHERE provider = ? AND conversation_id = ?`,
 		`DELETE FROM scheduled_jobs WHERE provider = ? AND conversation_id = ?`,
@@ -569,6 +600,73 @@ func (s *Store) UpsertSessionToken(record appstore.SessionTokenRecord) error {
 
 func (s *Store) DeleteSessionToken(ref conversation.Ref) error {
 	_, err := s.db.Exec(`DELETE FROM session_tokens WHERE provider = ? AND conversation_id = ?`, ref.Provider, ref.ConversationID)
+	return err
+}
+
+func (s *Store) UpsertReplySource(record appstore.ReplySourceRecord) error {
+	_, err := s.db.Exec(`
+		INSERT INTO backend_reply_sources (
+			session_id,
+			message_id,
+			provider,
+			conversation_id,
+			workspace_path,
+			input_json
+		) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(session_id, message_id) DO UPDATE SET
+			provider = excluded.provider,
+			conversation_id = excluded.conversation_id,
+			workspace_path = excluded.workspace_path,
+			input_json = excluded.input_json
+	`, record.SessionID, record.MessageID, record.Provider, record.ConversationID, record.WorkspacePath, record.InputJSON)
+	return err
+}
+
+func (s *Store) ListReplySources(sessionID string) ([]appstore.ReplySourceRecord, error) {
+	rows, err := s.db.Query(`
+		SELECT session_id, message_id, provider, conversation_id, workspace_path, input_json
+		FROM backend_reply_sources
+		WHERE (? = '' OR session_id = ?)
+		ORDER BY session_id ASC, message_id ASC
+	`, sessionID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := []appstore.ReplySourceRecord{}
+	for rows.Next() {
+		var record appstore.ReplySourceRecord
+		if err := rows.Scan(
+			&record.SessionID,
+			&record.MessageID,
+			&record.Provider,
+			&record.ConversationID,
+			&record.WorkspacePath,
+			&record.InputJSON,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func (s *Store) ReplyDelivered(sessionID, messageID string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 FROM backend_reply_deliveries WHERE session_id = ? AND message_id = ?
+		)
+	`, sessionID, messageID).Scan(&exists)
+	return exists, err
+}
+
+func (s *Store) MarkReplyDelivered(sessionID, messageID string) error {
+	_, err := s.db.Exec(`
+		INSERT OR IGNORE INTO backend_reply_deliveries (session_id, message_id, delivered_at)
+		VALUES (?, ?, ?)
+	`, sessionID, messageID, toUnix(time.Now()))
 	return err
 }
 

@@ -2,6 +2,8 @@ package opencode
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chenxuan520/agentbot/internal/backend"
@@ -32,22 +35,70 @@ var errPromptAborted = errors.New("opencode prompt aborted")
 
 var retryStatusOnlyPattern = regexp.MustCompile(`^((已)?从失败处重试(?:并(?:核实|确认))?(?:成功|完成)|(已)?重试(?:成功|完成)(?:并(?:核实|确认)完成)?)$`)
 
+var promptMessageIDs struct {
+	sync.Mutex
+	last uint64
+}
+
+func newPromptMessageID() (string, error) {
+	var suffix [14]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", err
+	}
+	const base62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	for i, value := range suffix {
+		suffix[i] = base62[int(value)%len(base62)]
+	}
+
+	promptMessageIDs.Lock()
+	now := uint64(time.Now().UnixMilli())*0x1000 + 1
+	if now <= promptMessageIDs.last {
+		now = promptMessageIDs.last + 1
+	}
+	promptMessageIDs.last = now
+	promptMessageIDs.Unlock()
+
+	var timestamp [6]byte
+	for i := range timestamp {
+		timestamp[i] = byte(now >> (40 - 8*i))
+	}
+	return "msg_" + hex.EncodeToString(timestamp[:]) + string(suffix[:]), nil
+}
+
 type promptOutcome struct {
 	result         backend.PromptResult
 	continuePrompt string
 }
 
 func (c *Client) Prompt(ctx context.Context, workspacePath, sessionID, text string, attachments []backend.Attachment, options backend.PromptOptions) (backend.PromptResult, error) {
+	v2, err := c.useV2(ctx)
+	if err != nil {
+		return backend.PromptResult{}, err
+	}
+	if v2 {
+		return c.v2Prompt(ctx, workspacePath, sessionID, text, attachments, options)
+	}
 	promptText := text
 	promptAttachments := attachments
 	currentSessionID := sessionID
 	for {
-		outcome, err := c.promptOnce(ctx, workspacePath, currentSessionID, promptText, promptAttachments, options)
+		messageID := ""
+		if options.OnPromptMessage != nil {
+			var err error
+			messageID, err = newPromptMessageID()
+			if err != nil {
+				return backend.PromptResult{}, err
+			}
+			if err := options.OnPromptMessage(messageID); err != nil {
+				return backend.PromptResult{}, err
+			}
+		}
+		outcome, err := c.promptOnce(ctx, workspacePath, currentSessionID, promptText, promptAttachments, options, messageID)
 		if err != nil {
 			// An explicit abort must end the run; auto-continuing here would make
 			// /abort a no-op because the loop would immediately re-prompt "继续".
 			if errors.Is(err, errPromptAborted) {
-				return backend.PromptResult{SessionID: currentSessionID, ReplyText: abortedReplyText}, nil
+				return backend.PromptResult{SessionID: currentSessionID, MessageID: outcome.result.MessageID, ParentID: outcome.result.ParentID, ReplyText: abortedReplyText}, nil
 			}
 			if strings.TrimSpace(currentSessionID) != "" {
 				abortCtx, cancel := context.WithTimeout(context.Background(), abortTimeout)
@@ -94,7 +145,7 @@ func (c *Client) Prompt(ctx context.Context, workspacePath, sessionID, text stri
 	}
 }
 
-func (c *Client) promptOnce(ctx context.Context, workspacePath, sessionID, text string, attachments []backend.Attachment, options backend.PromptOptions) (promptOutcome, error) {
+func (c *Client) promptOnce(ctx context.Context, workspacePath, sessionID, text string, attachments []backend.Attachment, options backend.PromptOptions, messageID string) (promptOutcome, error) {
 	query := url.Values{}
 	query.Set("directory", workspacePath)
 
@@ -114,6 +165,9 @@ func (c *Client) promptOnce(ctx context.Context, workspacePath, sessionID, text 
 
 	body := map[string]any{
 		"parts": parts,
+	}
+	if messageID != "" {
+		body["messageID"] = messageID
 	}
 	if options.NoReply {
 		body["noReply"] = true
@@ -160,7 +214,9 @@ func (c *Client) promptOnce(ctx context.Context, workspacePath, sessionID, text 
 
 	var payload struct {
 		Info struct {
+			ID        string `json:"id"`
 			SessionID string `json:"sessionID"`
+			ParentID  string `json:"parentID"`
 			Role      string `json:"role"`
 			Error     *struct {
 				Name string `json:"name"`
@@ -180,7 +236,7 @@ func (c *Client) promptOnce(ctx context.Context, workspacePath, sessionID, text 
 			message = payload.Info.Error.Name
 		}
 		if isAbortError(payload.Info.Error.Name, message) {
-			return promptOutcome{}, errPromptAborted
+			return promptOutcome{result: backend.PromptResult{MessageID: payload.Info.ID, ParentID: payload.Info.ParentID}}, errPromptAborted
 		}
 		return promptOutcome{}, fmt.Errorf("opencode prompt error: %s", message)
 	}
@@ -192,14 +248,14 @@ func (c *Client) promptOnce(ctx context.Context, workspacePath, sessionID, text 
 		if resolvedSessionID == "" {
 			resolvedSessionID = sessionID
 		}
-		return promptOutcome{result: backend.PromptResult{SessionID: resolvedSessionID}}, nil
+		return promptOutcome{result: backend.PromptResult{SessionID: resolvedSessionID, MessageID: payload.Info.ID, ParentID: payload.Info.ParentID}}, nil
 	}
 
 	resolvedSessionID := payload.Info.SessionID
 	if resolvedSessionID == "" {
 		resolvedSessionID = sessionID
 	}
-	result := backend.PromptResult{SessionID: resolvedSessionID, ReplyText: reply}
+	result := backend.PromptResult{SessionID: resolvedSessionID, MessageID: payload.Info.ID, ParentID: payload.Info.ParentID, ReplyText: reply}
 	return promptOutcome{result: result, continuePrompt: continuePromptFor(finishReason, reply)}, nil
 }
 

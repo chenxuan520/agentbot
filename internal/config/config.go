@@ -26,7 +26,9 @@ type Config struct {
 	ServerHost string
 	ServerPort int
 
-	BackendBaseURLs map[string]string
+	BackendBaseURLs  map[string]string
+	OpencodeUsername string
+	OpencodePassword string
 
 	OpencodeConfig map[string]any
 	ProjectToken   string
@@ -79,7 +81,9 @@ type fileProvider struct {
 }
 
 type fileBackend struct {
-	BaseURL string `json:"baseURL"`
+	BaseURL  string `json:"baseURL"`
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 func Load(root string) (Config, error) {
@@ -203,6 +207,8 @@ func mergeFileConfig(cfg *Config) error {
 		if backendCfg.BaseURL != "" {
 			cfg.BackendBaseURLs["opencode"] = backendCfg.BaseURL
 		}
+		cfg.OpencodeUsername = backendCfg.Username
+		cfg.OpencodePassword = backendCfg.Password
 	}
 
 	return nil
@@ -213,6 +219,15 @@ func mergeEnvFallback(cfg *Config) {
 		if value := os.Getenv("OPENCODE_BASE_URL"); value != "" {
 			cfg.BackendBaseURLs["opencode"] = value
 		}
+	}
+	if cfg.OpencodeUsername == "" {
+		cfg.OpencodeUsername = os.Getenv("OPENCODE_SERVER_USERNAME")
+	}
+	if cfg.OpencodePassword == "" {
+		cfg.OpencodePassword = os.Getenv("OPENCODE_PASSWORD")
+	}
+	if cfg.OpencodePassword == "" {
+		cfg.OpencodePassword = os.Getenv("OPENCODE_SERVER_PASSWORD")
 	}
 	if cfg.OpencodeConfig == nil {
 		if value := os.Getenv("OPENCODE_CONFIG_CONTENT"); value != "" {

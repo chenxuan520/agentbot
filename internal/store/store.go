@@ -34,6 +34,15 @@ type SessionTokenRecord struct {
 	UpdatedAt       time.Time
 }
 
+type ReplySourceRecord struct {
+	SessionID      string
+	MessageID      string
+	Provider       string
+	ConversationID string
+	WorkspacePath  string
+	InputJSON      string
+}
+
 type WorkspaceStore interface {
 	Get(ref conversation.Ref) (*WorkspaceRecord, error)
 	Upsert(record WorkspaceRecord) error
@@ -57,4 +66,11 @@ type SessionTokenStore interface {
 	GetSessionTokenByHash(tokenHash string) (*SessionTokenRecord, error)
 	UpsertSessionToken(record SessionTokenRecord) error
 	DeleteSessionToken(ref conversation.Ref) error
+}
+
+type ReplyStore interface {
+	UpsertReplySource(record ReplySourceRecord) error
+	ListReplySources(sessionID string) ([]ReplySourceRecord, error)
+	ReplyDelivered(sessionID, messageID string) (bool, error)
+	MarkReplyDelivered(sessionID, messageID string) error
 }

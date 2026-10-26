@@ -60,6 +60,11 @@ func NewService(store appstore.WorkspaceStore, workspaces *workspace.Manager) *S
 	return &Service{store: store, workspaces: workspaces}
 }
 
+func (s *Service) ReplyStore() appstore.ReplyStore {
+	replies, _ := s.store.(appstore.ReplyStore)
+	return replies
+}
+
 func (s *Service) Prepare(ref conversation.Ref, now time.Time) (*PreparedSession, error) {
 	return s.PrepareSlot(ref, SessionSlotMain, now)
 }

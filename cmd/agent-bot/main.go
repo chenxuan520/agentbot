@@ -231,6 +231,19 @@ func runDaemon(cfg config.Config, sessionService *session.Service, flowService *
 		// The Feishu listener also runs the other-bot poller internally, so the
 		// daemon only needs to start the listener, scheduler, and local API.
 		listener := feishugateway.NewListener(cfg, flowService, progressService, sessionService)
+		replyCtx, cancelReplies := context.WithCancel(ctx)
+		repliesDone := make(chan struct{})
+		defer func() {
+			cancelReplies()
+			<-repliesDone
+		}()
+		go func() {
+			defer close(repliesDone)
+			if err := flowService.ListenReplies(replyCtx); err != nil {
+				observability.RecordError("backend", "", "", "reply listener failed", err)
+				log.Printf("reply listener failed: %v", err)
+			}
+		}()
 		errCh := make(chan error, 3)
 		go func() {
 			errCh <- localAPIServer.Listen(ctx)
@@ -554,6 +567,19 @@ func runProviderAction(cfg config.Config, sessionService *session.Service, flowS
 		}
 		// The Feishu listener runs the other-bot poller internally.
 		listener := feishugateway.NewListener(cfg, flowService, progressService, sessionService)
+		replyCtx, cancelReplies := context.WithCancel(ctx)
+		repliesDone := make(chan struct{})
+		defer func() {
+			cancelReplies()
+			<-repliesDone
+		}()
+		go func() {
+			defer close(repliesDone)
+			if err := flowService.ListenReplies(replyCtx); err != nil {
+				observability.RecordError("backend", "", "", "reply listener failed", err)
+				log.Printf("reply listener failed: %v", err)
+			}
+		}()
 		errCh := make(chan error, 2)
 		go func() {
 			errCh <- localAPIServer.Listen(ctx)

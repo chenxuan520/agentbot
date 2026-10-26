@@ -21,6 +21,23 @@ type SessionMessageLookup interface {
 	GetSessionMessages(ctx context.Context, sessionID string) ([]SessionMessage, error)
 }
 
+type SessionReplyLookup interface {
+	GetSessionReplyMessages(ctx context.Context, workspacePath, sessionID string) ([]SessionMessage, error)
+	GetSessionReplyMessage(ctx context.Context, workspacePath, sessionID, messageID string) (SessionMessage, error)
+}
+
+type SessionEvent struct {
+	Type        string
+	SessionID   string
+	MessageID   string
+	Role        string
+	CompletedAt int64
+}
+
+type SessionEventSource interface {
+	WatchSessionEvents(ctx context.Context, handle func(SessionEvent) error) error
+}
+
 // SessionCompactor compacts a session's context in place (the session id stays
 // the same). Backends that cannot summarize/compact simply omit this interface.
 type SessionCompactor interface {
@@ -68,11 +85,21 @@ type SessionInfo struct {
 }
 
 type SessionMessage struct {
-	ID        string
-	Role      string
-	CreatedAt int64
-	Tokens    TokenUsage
-	Parts     []SessionMessagePart
+	ID               string
+	SessionID        string
+	ParentID         string
+	Role             string
+	CreatedAt        int64
+	CompletedAt      int64
+	Summary          bool
+	Finish           string
+	HasError         bool
+	ReplySuppressed  bool
+	Native           bool
+	Sequence         int64
+	SourceMessageIDs []string
+	Tokens           TokenUsage
+	Parts            []SessionMessagePart
 }
 
 // TokenUsage is opencode's per-message token accounting. For the latest
@@ -107,17 +134,47 @@ func LatestContextTokens(messages []SessionMessage) (TokenUsage, bool) {
 }
 
 type SessionMessagePart struct {
-	Type             string
-	Text             string
-	Reason           string
-	Tool             string
-	ToolStatus       string
-	ToolInputSummary string
+	Type               string
+	Text               string
+	Reason             string
+	Tool               string
+	ToolStatus         string
+	ToolInputSummary   string
+	Synthetic          bool
+	Ignored            bool
+	ToolSessionID      string
+	ToolBackground     bool
+	ToolUpdated        bool
+	ToolCancelled      bool
+	ProviderExecuted   bool
+	Interrupted        bool
+	CompactionContinue bool
+}
+
+func FinalReplyText(message SessionMessage) (string, bool) {
+	if message.Role != "assistant" || message.CompletedAt <= 0 || message.Summary || message.HasError || message.ReplySuppressed || message.Finish != "stop" {
+		return "", false
+	}
+	text := ""
+	for _, part := range message.Parts {
+		if part.Type == "tool" && !part.ProviderExecuted && !part.Interrupted {
+			return "", false
+		}
+		if part.Type != "text" || part.Synthetic || part.Ignored {
+			continue
+		}
+		if value := strings.TrimSpace(part.Text); value != "" {
+			text = value
+		}
+	}
+	return text, text != ""
 }
 
 type PromptOptions struct {
-	NoReply bool
-	System  string
+	NoReply          bool
+	System           string
+	OnPromptMessage  func(messageID string) error
+	SystemMessageIDs []string
 	// Model, when set ("providerID/modelID"), overrides the backend's default
 	// model for this single prompt. Backends that cannot switch models per
 	// request ignore it.
@@ -131,6 +188,10 @@ type Attachment struct {
 }
 
 type PromptResult struct {
-	SessionID string
-	ReplyText string
+	SessionID        string
+	MessageID        string
+	ParentID         string
+	ReplyText        string
+	Native           bool
+	SourceMessageIDs []string
 }

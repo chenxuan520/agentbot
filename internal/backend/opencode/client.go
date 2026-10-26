@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chenxuan520/agentbot/internal/backend"
@@ -18,11 +19,17 @@ const defaultHTTPTimeout = 5 * time.Minute
 
 type Options struct {
 	HTTPTimeout time.Duration
+	AutoDetect  bool
+	Username    string
+	Password    string
 }
 
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	autoDetect bool
+	versionMu  sync.Mutex
+	version    int
 }
 
 func New(baseURL string) *Client {
@@ -35,9 +42,21 @@ func NewWithOptions(baseURL string, options Options) *Client {
 	if timeout <= 0 {
 		timeout = defaultHTTPTimeout
 	}
+	httpClient := &http.Client{Timeout: timeout}
+	if options.Password != "" {
+		username := options.Username
+		if username == "" {
+			username = "opencode"
+		}
+		base, _ := url.Parse(trimmed)
+		httpClient.Transport = &authenticatedTransport{
+			base: http.DefaultTransport, origin: base, username: username, password: options.Password,
+		}
+	}
 	return &Client{
 		baseURL:    trimmed,
-		httpClient: &http.Client{Timeout: timeout},
+		httpClient: httpClient,
+		autoDetect: options.AutoDetect,
 	}
 }
 
@@ -46,6 +65,13 @@ func (c *Client) Name() string {
 }
 
 func (c *Client) Health(ctx context.Context) error {
+	v2, err := c.useV2(ctx)
+	if err != nil {
+		return err
+	}
+	if v2 {
+		return c.v2Health(ctx)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/global/health", nil)
 	if err != nil {
 		return err
@@ -89,6 +115,13 @@ func (c *Client) webAvailable(ctx context.Context) bool {
 }
 
 func (c *Client) CreateSession(ctx context.Context, workspacePath string) (string, error) {
+	v2, err := c.useV2(ctx)
+	if err != nil {
+		return "", err
+	}
+	if v2 {
+		return c.v2CreateSession(ctx, workspacePath)
+	}
 	_ = c.disposeInstance(ctx, workspacePath)
 
 	query := url.Values{}
@@ -126,6 +159,13 @@ func (c *Client) GetSession(ctx context.Context, sessionID string) (backend.Sess
 	if strings.TrimSpace(sessionID) == "" {
 		return backend.SessionInfo{}, fmt.Errorf("opencode get session requires session id")
 	}
+	v2, err := c.useV2(ctx)
+	if err != nil {
+		return backend.SessionInfo{}, err
+	}
+	if v2 {
+		return c.v2GetSession(ctx, sessionID)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/session/"+url.PathEscape(sessionID), nil)
 	if err != nil {
@@ -159,6 +199,13 @@ func (c *Client) GetSession(ctx context.Context, sessionID string) (backend.Sess
 func (c *Client) GetSessionMessages(ctx context.Context, sessionID string) ([]backend.SessionMessage, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, fmt.Errorf("opencode get session messages requires session id")
+	}
+	v2, err := c.useV2(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if v2 {
+		return c.v2GetSessionMessages(ctx, "", sessionID)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/session/"+url.PathEscape(sessionID)+"/message", nil)
@@ -289,6 +336,13 @@ func (c *Client) AbortSession(ctx context.Context, sessionID string) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("opencode abort session requires session id")
 	}
+	v2, err := c.useV2(ctx)
+	if err != nil {
+		return err
+	}
+	if v2 {
+		return c.v2AbortSession(ctx, sessionID)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/session/"+url.PathEscape(sessionID)+"/abort", nil)
 	if err != nil {
@@ -315,6 +369,13 @@ func (c *Client) AbortSession(ctx context.Context, sessionID string) error {
 func (c *Client) CompactSession(ctx context.Context, workspacePath, sessionID string) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("opencode compact requires session id")
+	}
+	v2, err := c.useV2(ctx)
+	if err != nil {
+		return err
+	}
+	if v2 {
+		return c.v2CompactSession(ctx, workspacePath, sessionID)
 	}
 
 	providerID, modelID, err := c.defaultModel(ctx, workspacePath)
@@ -354,6 +415,13 @@ func (c *Client) CompactSession(ctx context.Context, workspacePath, sessionID st
 
 // CurrentModel returns the workspace's effective model as "providerID/modelID".
 func (c *Client) CurrentModel(ctx context.Context, workspacePath string) (string, error) {
+	v2, err := c.useV2(ctx)
+	if err != nil {
+		return "", err
+	}
+	if v2 {
+		return c.v2CurrentModel(ctx, workspacePath)
+	}
 	provider, model, err := c.defaultModel(ctx, workspacePath)
 	if err != nil {
 		return "", err
@@ -366,6 +434,13 @@ func (c *Client) CurrentModel(ctx context.Context, workspacePath string) (string
 // /config/providers (the filtered, configured set) rather than /provider (the
 // full catalog of everything opencode knows).
 func (c *Client) ListModels(ctx context.Context, workspacePath string) (backend.ModelCatalog, error) {
+	v2, err := c.useV2(ctx)
+	if err != nil {
+		return backend.ModelCatalog{}, err
+	}
+	if v2 {
+		return c.v2ListModels(ctx, workspacePath)
+	}
 	query := url.Values{}
 	query.Set("directory", workspacePath)
 

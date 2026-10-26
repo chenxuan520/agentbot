@@ -64,6 +64,9 @@ func TestGetSessionMessagesParsesTranscriptParts(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		if r.URL.RawQuery != "" {
+			t.Errorf("legacy messages query = %q, want empty", r.URL.RawQuery)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`[
 			{"info":{"id":"msg-user","role":"user","time":{"created":1779785200000}},"parts":[{"type":"text","text":"hello"}]},

@@ -35,7 +35,9 @@ func TestLoadFromAgentBotJSON(t *testing.T) {
   },
   "backends": {
     "opencode": {
-      "baseURL": "http://localhost:5000"
+      "baseURL": "http://localhost:5000",
+      "username": "opencode-user",
+      "password": "opencode-session-token"
     }
   }
 }`
@@ -59,11 +61,39 @@ func TestLoadFromAgentBotJSON(t *testing.T) {
 	if cfg.BackendBaseURLs["opencode"] != "http://localhost:5000" {
 		t.Fatalf("opencode base url = %q", cfg.BackendBaseURLs["opencode"])
 	}
+	if cfg.OpencodeUsername != "opencode-user" || cfg.OpencodePassword != "opencode-session-token" {
+		t.Fatal("opencode backend authentication was not loaded")
+	}
 	if cfg.ProjectToken != "project-token" {
 		t.Fatalf("project token = %q", cfg.ProjectToken)
 	}
 	if cfg.AuthSecret != "secret-token" {
 		t.Fatalf("auth secret = %q", cfg.AuthSecret)
+	}
+}
+
+func TestOpenCodeAuthenticationEnvironmentFallback(t *testing.T) {
+	t.Setenv("OPENCODE_SERVER_USERNAME", "opencode-user")
+	t.Setenv("OPENCODE_SERVER_PASSWORD", "opencode-session-token")
+	t.Setenv("OPENCODE_PASSWORD", "")
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpencodeUsername != "opencode-user" || cfg.OpencodePassword != "opencode-session-token" {
+		t.Fatal("opencode authentication environment was not loaded")
+	}
+}
+
+func TestOpenCodeNativePasswordEnvironmentTakesPrecedence(t *testing.T) {
+	t.Setenv("OPENCODE_SERVER_PASSWORD", "legacy-password")
+	t.Setenv("OPENCODE_PASSWORD", "native-password")
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpencodePassword != "native-password" {
+		t.Fatal("native server password did not take precedence")
 	}
 }
 

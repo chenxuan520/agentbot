@@ -20,6 +20,7 @@ type commandResult struct {
 	handled   bool
 	replyText string
 	viaAgent  bool
+	agent     PromptResult
 }
 
 // topicCommandTopLevelHint is returned when a session-scoped command is issued
@@ -271,11 +272,15 @@ func (s *Service) handleCommand(ctx context.Context, ref conversation.Ref, input
 		if len(args) == 0 {
 			return commandResult{handled: true, replyText: "用法：`/btw <text>`。它会使用你在当前对话里的独立 btw session，不影响主 session。"}, nil
 		}
-		result, err := s.PromptConversationBTW(ctx, ref, input.SenderID, strings.TrimSpace(strings.Join(args, " ")))
+		replyMode, err := s.sessions.ReplyMode(ref)
 		if err != nil {
 			return commandResult{}, err
 		}
-		return commandResult{handled: true, replyText: result.ReplyText, viaAgent: true}, nil
+		result, err := s.PromptConversationBTW(withReplyRoute(ctx, input, replyMode), ref, input.SenderID, strings.TrimSpace(strings.Join(args, " ")))
+		if err != nil {
+			return commandResult{}, err
+		}
+		return commandResult{handled: true, replyText: result.ReplyText, viaAgent: true, agent: result}, nil
 	case "/btw-clear":
 		current, err := s.sessions.CurrentForSender(ref, input.SenderID)
 		if err != nil {
